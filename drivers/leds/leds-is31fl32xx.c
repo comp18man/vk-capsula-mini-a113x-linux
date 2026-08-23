@@ -9,12 +9,16 @@
  *   http://www.si-en.com/product.asp?parentid=890
  */
 
+#include <linux/bitfield.h>
+#include <linux/bits.h>
 #include <linux/device.h>
 #include <linux/i2c.h>
+#include <linux/kstrtox.h>
 #include <linux/kernel.h>
 #include <linux/leds.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/sysfs.h>
 
 /* Used to indicate a device has no such register */
 #define IS31FL32XX_REG_NONE 0xFF
@@ -41,9 +45,12 @@ struct is31fl32xx_led_data {
 	struct is31fl32xx_priv *priv;
 };
 
+#define IS31FL32XX_CURRENT_MASK		GENMASK(2, 1)
+
 struct is31fl32xx_priv {
 	const struct is31fl32xx_chipdef *cdef;
 	struct i2c_client *client;
+	u8 current_divider;
 	unsigned int num_leds;
 	struct is31fl32xx_led_data leds[];
 };
@@ -59,6 +66,8 @@ struct is31fl32xx_priv {
  * @pwm_register_base   : address of first PWM register
  * @pwm_registers_reversed: : true if PWM registers count down instead of up
  * @led_control_register_base : address of first LED control register (optional)
+ * @has_current_setting : true if that register also carries the SL field, an
+ *                        analogue divider on the current every channel sources
  * @enable_bits_per_led_control_register: number of LEDs enable bits in each
  * @reset_func          : pointer to reset function
  * @sw_shutdown_func    : pointer to software shutdown function
@@ -83,6 +92,7 @@ struct is31fl32xx_chipdef {
 	u8	pwm_register_base;
 	bool	pwm_registers_reversed;
 	u8	led_control_register_base;
+	bool	has_current_setting;
 	u8	enable_bits_per_led_control_register;
 	int (*reset_func)(struct is31fl32xx_priv *priv);
 	int (*sw_shutdown_func)(struct is31fl32xx_priv *priv, bool enable);
@@ -97,6 +107,7 @@ static const struct is31fl32xx_chipdef is31fl3236_cdef = {
 	.output_frequency_setting_reg		= IS31FL32XX_REG_NONE,
 	.pwm_register_base			= 0x01,
 	.led_control_register_base		= 0x26,
+	.has_current_setting			= true,
 	.enable_bits_per_led_control_register	= 1,
 };
 
@@ -109,6 +120,7 @@ static const struct is31fl32xx_chipdef is31fl3236a_cdef = {
 	.output_frequency_setting_reg		= 0x4b,
 	.pwm_register_base			= 0x01,
 	.led_control_register_base		= 0x26,
+	.has_current_setting			= true,
 	.enable_bits_per_led_control_register	= 1,
 };
 
@@ -302,6 +314,39 @@ static int is31fl32xx_software_shutdown(struct is31fl32xx_priv *priv,
 	return 0;
 }
 
+/*
+ * Enable every channel, and on parts that have the SL field set the current
+ * divider with it. Enable alone would leave SL at 00, the most the part will
+ * source; the PWM registers then chop that peak, so the two settings are
+ * independent -- SL picks the height of the pulse, the PWM its width. Called
+ * again whenever the divider changes, which is why it writes all the state.
+ */
+static int is31fl32xx_write_led_control(struct is31fl32xx_priv *priv)
+{
+	const struct is31fl32xx_chipdef *cdef = priv->cdef;
+	u8 value, num_regs;
+	int i, ret;
+
+	if (cdef->led_control_register_base == IS31FL32XX_REG_NONE)
+		return 0;
+
+	value = GENMASK(cdef->enable_bits_per_led_control_register - 1, 0);
+	if (cdef->has_current_setting)
+		value |= FIELD_PREP(IS31FL32XX_CURRENT_MASK,
+				    priv->current_divider - 1);
+
+	num_regs = cdef->channels / cdef->enable_bits_per_led_control_register;
+
+	for (i = 0; i < num_regs; i++) {
+		ret = is31fl32xx_write(priv, cdef->led_control_register_base + i,
+				       value);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int is31fl32xx_init_regs(struct is31fl32xx_priv *priv)
 {
 	const struct is31fl32xx_chipdef *cdef = priv->cdef;
@@ -311,25 +356,9 @@ static int is31fl32xx_init_regs(struct is31fl32xx_priv *priv)
 	if (ret)
 		return ret;
 
-	/*
-	 * Set enable bit for all channels.
-	 * We will control state with PWM registers alone.
-	 */
-	if (cdef->led_control_register_base != IS31FL32XX_REG_NONE) {
-		u8 value =
-		    GENMASK(cdef->enable_bits_per_led_control_register-1, 0);
-		u8 num_regs = cdef->channels /
-				cdef->enable_bits_per_led_control_register;
-		int i;
-
-		for (i = 0; i < num_regs; i++) {
-			ret = is31fl32xx_write(priv,
-					       cdef->led_control_register_base+i,
-					       value);
-			if (ret)
-				return ret;
-		}
-	}
+	ret = is31fl32xx_write_led_control(priv);
+	if (ret)
+		return ret;
 
 	ret = is31fl32xx_software_shutdown(priv, false);
 	if (ret)
@@ -449,11 +478,67 @@ static const struct of_device_id of_is31fl32xx_match[] = {
 
 MODULE_DEVICE_TABLE(of, of_is31fl32xx_match);
 
+/*
+ * The divider is analogue and applies to every channel at once, so it belongs
+ * to the controller rather than to any one LED. Changing it alone keeps the
+ * output free of switching, which the PWM registers cannot offer.
+ */
+static ssize_t current_divider_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	struct is31fl32xx_priv *priv = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", priv->current_divider);
+}
+
+static ssize_t current_divider_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t count)
+{
+	struct is31fl32xx_priv *priv = dev_get_drvdata(dev);
+	unsigned int value;
+	int ret;
+
+	ret = kstrtouint(buf, 0, &value);
+	if (ret)
+		return ret;
+
+	if (value < 1 || value > 4)
+		return -ERANGE;
+
+	priv->current_divider = value;
+
+	ret = is31fl32xx_write_led_control(priv);
+
+	return ret ? ret : count;
+}
+static DEVICE_ATTR_RW(current_divider);
+
+static struct attribute *is31fl32xx_attrs[] = {
+	&dev_attr_current_divider.attr,
+	NULL,
+};
+
+static umode_t is31fl32xx_attr_visible(struct kobject *kobj,
+				       struct attribute *attr, int n)
+{
+	struct is31fl32xx_priv *priv = dev_get_drvdata(kobj_to_dev(kobj));
+
+	return priv->cdef->has_current_setting ? attr->mode : 0;
+}
+
+static const struct attribute_group is31fl32xx_group = {
+	.attrs = is31fl32xx_attrs,
+	.is_visible = is31fl32xx_attr_visible,
+};
+__ATTRIBUTE_GROUPS(is31fl32xx);
+
 static int is31fl32xx_probe(struct i2c_client *client)
 {
 	const struct is31fl32xx_chipdef *cdef;
 	struct device *dev = &client->dev;
 	struct is31fl32xx_priv *priv;
+	u32 divider;
 	int count;
 	int ret = 0;
 
@@ -470,7 +555,19 @@ static int is31fl32xx_probe(struct i2c_client *client)
 
 	priv->client = client;
 	priv->cdef = cdef;
+	priv->current_divider = 1;
 	i2c_set_clientdata(client, priv);
+
+	if (!of_property_read_u32(dev_of_node(dev), "issi,current-divider",
+				  &divider)) {
+		if (!cdef->has_current_setting)
+			return dev_err_probe(dev, -EINVAL,
+					     "this part has no current setting\n");
+		if (divider < 1 || divider > 4)
+			return dev_err_probe(dev, -EINVAL,
+					     "issi,current-divider must be 1 to 4\n");
+		priv->current_divider = divider;
+	}
 
 	ret = is31fl32xx_init_regs(priv);
 	if (ret)
@@ -515,6 +612,7 @@ static struct i2c_driver is31fl32xx_driver = {
 	.driver = {
 		.name	= "is31fl32xx",
 		.of_match_table = of_is31fl32xx_match,
+		.dev_groups = is31fl32xx_groups,
 	},
 	.probe		= is31fl32xx_probe,
 	.remove		= is31fl32xx_remove,

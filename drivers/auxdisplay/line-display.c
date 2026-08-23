@@ -366,8 +366,12 @@ int linedisp_register(struct linedisp *linedisp, struct device *parent,
 	if (err)
 		goto out_del_timer;
 
-	/* display a default message */
-	err = linedisp_display(linedisp, LINEDISP_INIT_TEXT, -1);
+	/*
+	 * Display a default message. An empty one takes the clear path in
+	 * linedisp_display(): the buffer is blanked, the display is updated
+	 * once, and no scroll timer is armed.
+	 */
+	err = linedisp_display(linedisp, ops->no_boot_message ? "" : LINEDISP_INIT_TEXT, -1);
 	if (err)
 		goto out_del_dev;
 

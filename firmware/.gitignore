@@ -1,0 +1,4 @@
+# The top-level .gitignore hides *.bin as a build artefact, which also hides the
+# vendor blobs kept here on purpose. CONFIG_EXTRA_FIRMWARE names them, so a
+# clone without them does not build at all.
+!eq_8918.bin

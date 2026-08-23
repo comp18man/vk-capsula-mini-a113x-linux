@@ -526,6 +526,18 @@ config SEG_LED_GPIO
 	  This driver can also be built as a module. If so, the module
 	  will be called seg-led-gpio.
 
+config SEG_LED_CLASS
+	tristate "Multi-digit 7-segment display built from LED class devices"
+	depends on LEDS_CLASS
+	select LINEDISP
+	help
+	  This driver supports a multi-digit 7-segment display whose
+	  segments are LED class devices, as found on panels driven by a
+	  multi-channel LED controller on I2C rather than by GPIOs.
+
+	  This driver can also be built as a module. If so, the module
+	  will be called seg-led-class.
+
 #
 # Character LCD with non-conforming interface section
 #

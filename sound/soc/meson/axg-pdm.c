@@ -231,6 +231,7 @@ static int axg_pdm_hw_params(struct snd_pcm_substream *substream,
 	int ret;
 
 	switch (params_width(params)) {
+	case 16:
 	case 24:
 		val = PDM_CTRL_OUT_MODE;
 		break;
@@ -451,7 +452,8 @@ static struct snd_soc_dai_driver axg_pdm_dai_drv = {
 		.rates		= SNDRV_PCM_RATE_CONTINUOUS,
 		.rate_min	= 5512,
 		.rate_max	= 48000,
-		.formats	= (SNDRV_PCM_FMTBIT_S24_LE |
+		.formats	= (SNDRV_PCM_FMTBIT_S16_LE |
+				   SNDRV_PCM_FMTBIT_S24_LE |
 				   SNDRV_PCM_FMTBIT_S32_LE),
 	},
 	.ops		= &axg_pdm_dai_ops,

@@ -14,6 +14,7 @@ dtb-$(CONFIG_ARCH_MESON) += meson-axg-jethome-jethub-j100.dtb
 dtb-$(CONFIG_ARCH_MESON) += meson-axg-jethome-jethub-j110-rev-2.dtb
 dtb-$(CONFIG_ARCH_MESON) += meson-axg-jethome-jethub-j110-rev-3.dtb
 dtb-$(CONFIG_ARCH_MESON) += meson-axg-s400.dtb
+dtb-$(CONFIG_ARCH_MESON) += meson-axg-s420-marusia-mini.dtb
 dtb-$(CONFIG_ARCH_MESON) += meson-g12a-fbx8am-brcm.dtb
 dtb-$(CONFIG_ARCH_MESON) += meson-g12a-fbx8am-realtek.dtb
 dtb-$(CONFIG_ARCH_MESON) += meson-g12a-radxa-zero.dtb

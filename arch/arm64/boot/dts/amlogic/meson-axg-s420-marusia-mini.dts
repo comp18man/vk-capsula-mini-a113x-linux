@@ -1,0 +1,629 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * VK Capsula Mini - Amlogic AXG (A113X).
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/clock/axg-clkc.h>
+#include <dt-bindings/clock/axg-audio-clkc.h>
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/gpio/meson-axg-gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+#include "meson-axg.dtsi"
+
+/* Replace the upstream node name with the exact ABI vendor U-Boot expects. */
+/delete-node/ &secmon_reserved;
+
+/ {
+	model = "VK Capsula Mini (Amlogic A113X)";
+
+	compatible = "amlogic,a113d", "amlogic,meson-axg";
+
+	aliases {
+		serial0 = &uart_AO;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+		bootargs = "earlycon=meson,0xff803000 console=ttyAML0,115200n8 rdinit=/init loglevel=8 ignore_loglevel";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x00000000 0x0 0x10000000>;
+	};
+
+	reserved-memory {
+		/*
+		 * Vendor rsvmem check wants these exact paths and compatible spelling,
+		 * then overwrites reg from the secure AO registers. no-map keeps secure
+		 * RAM out of CMA.
+		 */
+		uboot_secmon_reserved: linux,secmon {
+			compatible = "amlogic, aml_secmon_memory";
+			reg = <0x0 0x05000000 0x0 0x00400000>;
+			no-map;
+		};
+
+		secos_reserved: linux,secos {
+			compatible = "amlogic, aml_secos_memory";
+			reg = <0x0 0x05300000 0x0 0x02000000>;
+			no-map;
+			status = "disabled";
+		};
+	};
+
+	/*
+	 * meson-gx-mmc takes ocr_avail from the vmmc regulator alone: without one
+	 * the range is empty and the core says "no support for card's volts".
+	 * 3.3 V card, 1.8 V I/O, which is what SDR104 needs.
+	 */
+	vddao_3v3: regulator-vddao-3v3 {
+		compatible = "regulator-fixed";
+		regulator-name = "VDDAO_3V3";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+
+	vddio_boot: regulator-vddio-boot {
+		compatible = "regulator-fixed";
+		regulator-name = "VDDIO_BOOT";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		vin-supply = <&vddao_3v3>;
+		regulator-always-on;
+	};
+
+	/*
+	 * Wi-Fi reference clock. The stock tree muxes PWM_A onto pwm_a_x20
+	 * and calls the group wifi_32k_pins; 30518 ns is 32.768 kHz.
+	 */
+	wifi32k: wifi32k {
+		compatible = "pwm-clock";
+		#clock-cells = <0>;
+		clock-frequency = <32768>;
+		pwms = <&pwm_ab 0 30518 0>;
+	};
+
+	/*
+	 * The W1 driver touches no GPIOs, so power is the sequencer's job.
+	 * GPIOX_7 is power_on_pin in the stock tree. Active-low because mmc-pwrseq
+	 * asserts "reset" to hold the chip off.
+	 */
+	sdio_pwrseq: sdio-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		reset-gpios = <&gpio GPIOX_7 GPIO_ACTIVE_LOW>;
+		clocks = <&wifi32k>;
+		clock-names = "ext_clock";
+	};
+
+	/*
+	 * Four digits as one character line display. The driver takes this list
+	 * as segment[digit * 7 + segment] with segments in a..g order, so the
+	 * order of the phandles is the map.
+	 *
+	 *
+	 * The led@N labels below are untouched: they say which controller
+	 * channel drives which segment of which physical digit, which is
+	 * soldering and does not care how the board sits in the case.
+	 *
+	 * The colon stays out of this list, it is not part of a character cell.
+	 */
+	display {
+		compatible = "led-7-segment";
+
+		leds = <&d4d>, <&d4e>, <&d4f>, <&d4a>, <&d4b>, <&d4c>, <&d4g>,
+		       <&d3d>, <&d3e>, <&d3f>, <&d3a>, <&d3b>, <&d3c>, <&d3g>,
+		       <&d2d>, <&d2e>, <&d2f>, <&d2a>, <&d2b>, <&d2c>, <&d2g>,
+		       <&d1d>, <&d1e>, <&d1f>, <&d1a>, <&d1b>, <&d1c>, <&d1g>;
+	};
+
+	/*
+	 * Generic DMIC codec terminating the PDM link. Two mics per data line,
+	 * din0 and din1 routed, so four channels.
+	 */
+	dmics: audio-codec-0 {
+		compatible = "dmic-codec";
+		#sound-dai-cells = <0>;
+		num-channels = <4>;
+		wakeup-delay-ms = <50>;
+		sound-name-prefix = "MIC";
+	};
+
+	sound {
+		compatible = "amlogic,axg-sound-card";
+		model = "MARUSIA-MINI";
+
+		audio-aux-devs = <&tdmin_c>, <&tdmin_lb>, <&tdmout_c>;
+
+		audio-routing = "TDMOUT_C IN 0", "FRDDR_A OUT 2",
+				"TDM_C Playback", "TDMOUT_C OUT",
+				"TDMIN_C IN 2", "TDM_C Capture",
+				"TDMIN_LB IN 2", "TDM_C Loopback",
+				"TODDR_A IN 4", "PDM Capture",
+				"TODDR_B IN 2", "TDMIN_C OUT",
+				"TODDR_B IN 6", "TDMIN_LB OUT";
+
+		clocks = <&clkc CLKID_HIFI_PLL>,
+			 <&clkc CLKID_MPLL0>,
+			 <&clkc CLKID_MPLL1>;
+
+		assigned-clocks = <&clkc CLKID_HIFI_PLL>,
+				  <&clkc CLKID_MPLL0>,
+				  <&clkc CLKID_MPLL1>;
+		assigned-clock-parents = <0>, <0>, <0>;
+		assigned-clock-rates = <589824000>,
+				       <270950400>,
+				       <393216000>;
+
+		dai-link-0 {
+			sound-dai = <&frddr_a>;
+		};
+
+		dai-link-1 {
+			sound-dai = <&toddr_a>;
+		};
+
+		dai-link-2 {
+			sound-dai = <&toddr_b>;
+		};
+
+		/*
+		 * Speaker path: TX on lane 0 (tdmc_dout0).
+		 *
+		 * The RX mask below is declared but inert: ntp8918 offers no capture
+		 * DAI, so this link has no capture direction and TDMIN_C never runs.
+		 * Echo cancellation takes its reference from the SoC-internal TDM_C
+		 * loopback instead. Kept because the wiring is real -- the amplifier's
+		 * MONITOR_1 pin reaches tdmc_din1 -- and one .capture block in the
+		 * codec would make it live.
+		 *
+		 * The 32-bit slot width is load-bearing: omit it and axg-card passes 0,
+		 * 16-bit samples give a 1.536 MHz bit clock, and the amplifier takes only
+		 * 2.048, 2.8224, 3.072 or 6.144.
+		 */
+		dai-link-3 {
+			sound-dai = <&tdmif_c>;
+			dai-format = "i2s";
+			dai-tdm-slot-num = <2>;
+			dai-tdm-slot-width = <32>;
+			dai-tdm-slot-tx-mask-0 = <1 1>;
+			dai-tdm-slot-rx-mask-1 = <1 1>;
+			mclk-fs = <256>;
+
+			codec {
+				sound-dai = <&ntp8910a>;
+			};
+		};
+
+		/* Microphone array. */
+		dai-link-4 {
+			sound-dai = <&pdm>;
+
+			codec {
+				sound-dai = <&dmics>;
+			};
+		};
+	};
+};
+
+/*
+ * A WS2812B chain needs MOSI alone, the bit pattern carries its own
+ * timing. Upstream offers only a combined miso+mosi+clk group.
+ */
+&pinctrl_periphs {
+	spi0_mosi_pins: spi0-mosi {
+		mux {
+			groups = "spi0_mosi";
+			function = "spi0";
+			bias-disable;
+		};
+	};
+
+	i2c3_a19_pu_pins: i2c3-a19-pu {
+		mux {
+			groups = "i2c3_sda_a19",
+				 "i2c3_sck_a20";
+			function = "i2c3";
+			bias-pull-up;
+		};
+	};
+};
+
+&uart_AO {
+	status = "okay";
+	pinctrl-0 = <&uart_ao_a_pins>;
+	pinctrl-names = "default";
+};
+
+/*
+ * GPIOZ_4 enables the front panel, either variant.
+ */
+&gpio {
+	front_panel_enable_hog {
+		gpio-hog;
+		gpios = <GPIOZ_4 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "front-panel-enable";
+	};
+
+	/*
+	 * GPIOA_18 gates the amplifier.
+	 *
+	 * The stock tree calls it fault-gpios, but the vendor driver takes
+	 * it GPIOD_OUT_HIGH and releases it 500us after reset:
+	 *
+	 *	reset  <- deasserted, 100us
+	 *	reset  <- asserted
+	 *	fault  <- asserted
+	 *	300us
+	 *	reset  <- deasserted, 500us
+	 *	fault  <- deasserted, 500us
+	 *
+	 * so it gates the part rather than reporting faults.
+	 */
+	amp_enable_hog {
+		gpio-hog;
+		gpios = <GPIOA_18 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "amp-enable";
+	};
+};
+
+/*
+ * i2c1: touch keys, light sensor, front panel. The panel is an IS31FL3236
+ * at 0x3c or an AW21036 at 0x34 depending on batch; only the IS31 is
+ * declared. AW21036 commented below as wiring reference.
+ */
+&i2c1 {
+	status = "okay";
+	pinctrl-0 = <&i2c1_z_pins>;
+	pinctrl-names = "default";
+
+	led-controller@3c {
+		compatible = "issi,is31fl3236a";
+		reg = <0x3c>;
+		issi,22khz-pwm;
+
+		/*
+		 * Half the current every channel sources, which is what stock asked
+		 * for with led-max-microamp = 10000 and upstream does not read. The
+		 * divider is analogue, so at full PWM duty nothing switches at all.
+		 */
+		issi,current-divider = <2>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/*
+		 * Channel-to-segment map, found by lighting one channel at a time: digit 1
+		 * is channels 9..15, digit 2 is 1..8 without 2, which belongs to digit 4,
+		 * and digits 3 and 4 share 18..30. Digits are numbered as the panel reads,
+		 * which is upside down from the board. Four digits, HH:MM, plus a two-dot
+		 * colon:
+		 *
+		 *        a
+		 *      f   b
+		 *        g
+		 *      e   c
+		 *        d
+		 *
+		 * The label reaches /sys/class/leds verbatim.
+		 */
+		d2d: led@1  { reg = <1>;  label = "clock:d2:d"; };
+		d4d: led@2  { reg = <2>;  label = "clock:d4:d"; };
+		d2e: led@3  { reg = <3>;  label = "clock:d2:e"; };
+		d2g: led@4  { reg = <4>;  label = "clock:d2:g"; };
+		d2c: led@5  { reg = <5>;  label = "clock:d2:c"; };
+		d2a: led@6  { reg = <6>;  label = "clock:d2:a"; };
+		d2b: led@7  { reg = <7>;  label = "clock:d2:b"; };
+		d2f: led@8  { reg = <8>;  label = "clock:d2:f"; };
+		d1c: led@9  { reg = <9>;  label = "clock:d1:c"; };
+		d1g: led@a  { reg = <10>; label = "clock:d1:g"; };
+		d1d: led@b  { reg = <11>; label = "clock:d1:d"; };
+		d1f: led@c  { reg = <12>; label = "clock:d1:f"; };
+		d1e: led@d  { reg = <13>; label = "clock:d1:e"; };
+		d1b: led@e  { reg = <14>; label = "clock:d1:b"; };
+		d1a: led@f  { reg = <15>; label = "clock:d1:a"; };
+
+		/*
+		 * Not part of a character cell - stays a plain LED, so it keeps
+		 * its triggers. Named for where the dot appears to the reader:
+		 * the panel is upside down, so channel 16 is the lower one.
+		 */
+		led@10 { reg = <16>; label = "clock:colon:bottom"; };
+		led@11 { reg = <17>; label = "clock:colon:top"; };
+
+		d4a: led@12 { reg = <18>; label = "clock:d4:a"; };
+		d3a: led@13 { reg = <19>; label = "clock:d3:a"; };
+		d3f: led@14 { reg = <20>; label = "clock:d3:f"; };
+		d3g: led@15 { reg = <21>; label = "clock:d3:g"; };
+		d4f: led@16 { reg = <22>; label = "clock:d4:f"; };
+		d4b: led@17 { reg = <23>; label = "clock:d4:b"; };
+		d3b: led@18 { reg = <24>; label = "clock:d3:b"; };
+		d4g: led@19 { reg = <25>; label = "clock:d4:g"; };
+		d3e: led@1a { reg = <26>; label = "clock:d3:e"; };
+		d3d: led@1b { reg = <27>; label = "clock:d3:d"; };
+		d3c: led@1c { reg = <28>; label = "clock:d3:c"; };
+		d4e: led@1d { reg = <29>; label = "clock:d4:e"; };
+		d4c: led@1e { reg = <30>; label = "clock:d4:c"; };
+	};
+
+	/*
+	 * AW21036, the other panel variant, 30 channels, same clock-ledN meaning.
+	 * leds-aw200xx.c is the AW20036 and is NOT this part. The driver is
+	 * ordinary work; kept commented out because board on hand carries
+	 * the IS31FL3236 and there is nothing to test it on.
+	 *
+	 * led-controller@34 {
+	 *	compatible = "awinic,aw21036";
+	 *	reg = <0x34>;
+	 *	#address-cells = <1>;
+	 *	#size-cells = <0>;
+	 *	enable-gpios = <&gpio GPIOZ_4 GPIO_ACTIVE_HIGH>;
+	 *	... led@1 .. led@30, reg = <1>..<30> ...
+	 * };
+	 *
+	 */
+
+	/*
+	 * Hynitron CSK05T capacitive keys, five channels at 0x15.
+	 *
+	 * No interrupt, though stock describes one on GPIOZ_6: the part is
+	 * reported never to produce an edge on INT. Channel 3 is the unmarked middle pad.
+	 */
+	keys@15 {
+		compatible = "hynitron,csk05t";
+		reg = <0x15>;
+		reset-gpios = <&gpio GPIOZ_7 GPIO_ACTIVE_LOW>;
+		linux,keycodes = <KEY_VOLUMEDOWN>,	/* channel 0 */
+				 <KEY_MICMUTE>,		/* channel 1 */
+				 <KEY_VOLUMEUP>,	/* channel 2 */
+				 <KEY_PROG1>,		/* channel 3, centre */
+				 <KEY_VOICECOMMAND>;	/* channel 4 */
+	};
+
+	/*
+	 * Light sensor at 0x29, part id 0x71. INT unneeded, readings are taken
+	 * on demand.
+	 */
+	light-sensor@29 {
+		compatible = "rohm,bh1730fvc";
+		reg = <0x29>;
+	};
+};
+
+/* i2c3 (cbus 0x1c000). Amplifier only. */
+&i2c3 {
+	status = "okay";
+	pinctrl-0 = <&i2c3_a19_pu_pins>;
+	pinctrl-names = "default";
+
+	/*
+	 * NTP8910A, register-compatible with the NTP8918 for everything the driver
+	 * touches, so the fallback compatible binds it. Its "bck" clock is the
+	 * TDM-C bit clock, which runs continuously here.
+	 */
+	ntp8910a: audio-codec@2a {
+		compatible = "neofidelity,ntp8910a", "neofidelity,ntp8918";
+		reg = <0x2a>;
+		#sound-dai-cells = <0>;
+		reset-gpios = <&gpio GPIOA_17 GPIO_ACTIVE_LOW>;
+		clocks = <&clkc_audio AUD_CLKID_MST_C_SCLK>;
+		clock-names = "bck";
+
+		/*
+		 * The socket shorts this to ground when a plug goes in and the
+		 * pad pull holds it up while the socket is empty; measured on
+		 * the board, and it is the polarity the stock kernel selects
+		 * with hp_det_inv. The jack is driven by its own converter off
+		 * the same I2S link, so it keeps playing with this part shut
+		 * down - the only thing insertion has to do is silence the
+		 * speaker, which is why the line lives on the amplifier rather
+		 * than on the card.
+		 */
+		hp-det-gpios = <&gpio_ao GPIOAO_4 GPIO_ACTIVE_LOW>;
+
+		/*
+		 * Pad 4 is GPIOAO_4: the controller numbers its hundred inputs
+		 * bank by bank, AO first over 0..13, then Z, BOOT, A, X and Y
+		 * - which is the same count that puts the s400 board's PHY on
+		 * GPIOY_14 at 98.
+		 *
+		 * Only one edge can be asked for here; this generation has no
+		 * both-edges mode and set_type refuses it. The named edge is
+		 * the one an empty socket can still take, and the driver turns
+		 * the trigger around after each change.
+		 */
+		interrupt-parent = <&gpio_intc>;
+		interrupts = <4 IRQ_TYPE_EDGE_FALLING>;
+	};
+};
+
+/*
+ * Top ring: 12 WS2812B, 36 colour bytes as raw SPI data. No mainline
+ * driver fits; spidev is the conventional placeholder, not a real part.
+ */
+&spicc0 {
+	status = "okay";
+	pinctrl-0 = <&spi0_mosi_pins>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	topleds@0 {
+		compatible = "rohm,dh2228fv";
+		reg = <0>;
+		spi-max-frequency = <3340000>;
+	};
+};
+
+&pcie_phy {
+	status = "disabled";
+};
+
+
+/* Microphone array: dclk on A14, two data lines. */
+&pdm {
+	status = "okay";
+	pinctrl-0 = <&pdm_dclk_a14_pins>, <&pdm_din0_pins>, <&pdm_din1_pins>;
+	pinctrl-names = "default";
+};
+
+/*
+ * TDM-C. Stock asks for "mclk_a", which upstream does not define; upstream
+ * mclk_c is GPIOA_0 and both trees agree GPIOA_1 is mclk_b, so mclk_c is
+ * the match. Worth confirming on a scope.....
+ */
+&tdmif_c {
+	status = "okay";
+	pinctrl-0 = <&tdmc_sclk_pins>, <&tdmc_fs_pins>,
+		    <&tdmc_dout0_pins>, <&tdmc_din1_pins>,
+		    <&mclk_c_pins>;
+	pinctrl-names = "default";
+};
+
+&tdmin_c {
+	status = "okay";
+};
+
+&tdmin_lb {
+	status = "okay";
+};
+
+&tdmout_c {
+	status = "okay";
+};
+
+&frddr_a {
+	status = "okay";
+};
+
+&toddr_a {
+	status = "okay";
+};
+
+&toddr_b {
+	status = "okay";
+};
+
+/*
+ * Toshiba TC58NVG1S3HBAI4, 256 MiB, 2 KiB pages, 128 KiB erase blocks,
+ * 64 bytes of OOB.
+ *
+ * bch8, as stock bch_mode = "bch8_1k" asks and the only strength the AXG
+ * driver has. Matching it is what lets Linux and U-Boot read each other's
+ * writes. 
+ */
+&nfc {
+	status = "okay";
+
+	nand@0 {
+		reg = <0>;
+		/*
+		 * Stock forces no-R/B mode and waits via STATUS then READ0. Absent
+		 * nand-rb selects the matching path in the driver.
+		 */
+		nand-ecc-mode = "hw";
+		nand-ecc-strength = <8>;
+
+		/*
+		 * 512, not the 1024 the bch8_1k name suggests: four ECC blocks of 512 with
+		 * 2 user and 14 parity bytes each is exactly the 64 bytes of spare exposed,
+		 * and it is what the parameter page asks for. Needs fix
+		 * meson_nfc_cmd_access() to work.
+		 */
+		nand-ecc-step-size = <512>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "bootloader";
+				reg = <0x00000000 0x00200000>;
+				read-only;
+			};
+
+			partition@200000 {
+				label = "reserved";
+				reg = <0x00200000 0x00600000>;
+				read-only;
+			};
+
+			partition@800000 {
+				label = "tpl";
+				reg = <0x00800000 0x00800000>;
+				read-only;
+			};
+
+			partition@1000000 {
+				label = "misc";
+				reg = <0x01000000 0x00200000>;
+			};
+
+			partition@1200000 {
+				label = "kernel";
+				reg = <0x01200000 0x01900000>;
+			};
+
+			partition@2b00000 {
+				label = "dtb";
+				reg = <0x02b00000 0x00100000>;
+			};
+
+			partition@2c00000 {
+				label = "ubi";
+				reg = <0x02c00000 0x0d400000>;
+			};
+		};
+	};
+};
+
+/* PWM_A, used only as the Wi-Fi 32.768 kHz reference. */
+&pwm_ab {
+	status = "okay";
+	pinctrl-0 = <&pwm_a_x20_pins>;
+	pinctrl-names = "default";
+};
+
+/*
+ * SDIO, carrying only the Amlogic W1 Wi-Fi part. No child node: the driver
+ * binds by SDIO vendor/device id, not by compatible. Stock runs this bus
+ * at SDR104.
+ */
+&sd_emmc_b {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	pinctrl-0 = <&sdio_pins>;
+	pinctrl-1 = <&sdio_clk_gate_pins>;
+	pinctrl-names = "default", "clk-gate";
+
+	bus-width = <4>;
+	cap-sd-highspeed;
+	cap-sdio-irq;
+	sd-uhs-sdr104;
+	max-frequency = <200000000>;
+	non-removable;
+	disable-wp;
+
+	mmc-pwrseq = <&sdio_pwrseq>;
+
+	vmmc-supply = <&vddao_3v3>;
+	vqmmc-supply = <&vddio_boot>;
+};
+
+&sd_emmc_c {
+	status = "disabled";
+};
+
+&usb {
+	status = "okay";
+	dr_mode = "peripheral";
+};

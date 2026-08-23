@@ -143,6 +143,22 @@ static void toshiba_nand_benand_init(struct nand_chip *chip)
 	mtd_set_ooblayout(mtd, nand_get_large_page_ooblayout());
 }
 
+/*
+ * The 24nm raw SLC rule above doubles the spare area to 32
+ * bytes per 512; the TC58NVG1S3HBAI4 is already formatted by the vendor
+ * bootloader at 64 per 2 KiB page, four ECC chunks of 16. Believing 128
+ * puts every chunk in the wrong place: vendor-written pages read wrong
+ * past the first 512 bytes. The bootloader has already decided and it is the one that loads
+ * the kernel. Scoped to that exact ID.
+ */
+static bool toshiba_nand_oob_is_vendor_formatted(struct nand_chip *chip)
+{
+	static const u8 tc58nvg1s3hbai4[] = { 0x98, 0xda, 0x90, 0x15, 0x76, 0x16 };
+
+	return chip->id.len >= sizeof(tc58nvg1s3hbai4) &&
+	       !memcmp(chip->id.data, tc58nvg1s3hbai4, sizeof(tc58nvg1s3hbai4));
+}
+
 static void toshiba_nand_decode_id(struct nand_chip *chip)
 {
 	struct nand_device *base = &chip->base;
@@ -164,7 +180,8 @@ static void toshiba_nand_decode_id(struct nand_chip *chip)
 	 */
 	if (chip->id.len >= 6 && nand_is_slc(chip) &&
 	    (chip->id.data[5] & 0x7) == 0x6 /* 24nm */ &&
-	    !(chip->id.data[4] & TOSHIBA_NAND_ID4_IS_BENAND) /* !BENAND */) {
+	    !(chip->id.data[4] & TOSHIBA_NAND_ID4_IS_BENAND) /* !BENAND */ &&
+	    !toshiba_nand_oob_is_vendor_formatted(chip)) {
 		memorg->oobsize = 32 * memorg->pagesize >> 9;
 		mtd->oobsize = memorg->oobsize;
 	}

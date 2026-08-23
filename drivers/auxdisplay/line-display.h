@@ -48,10 +48,18 @@ struct linedisp_map {
  * struct linedisp_ops - character line display operations
  * @get_map_type: Function called to get the character mapping, if required
  * @update: Function called to update the display. This must not sleep!
+ * @no_boot_message: Skip the "Linux <version>" greeting shown at
+ *                   registration. On a display too narrow to hold it the
+ *                   greeting scrolls, and the scroll timer keeps repainting
+ *                   for ever, which is unwanted when every repaint costs a
+ *                   burst of I2C traffic. CONFIG_PANEL_BOOT_MESSAGE cannot
+ *                   be used for this: it is gated behind the parallel port
+ *                   panel driver.
  */
 struct linedisp_ops {
 	int (*get_map_type)(struct linedisp *linedisp);
 	void (*update)(struct linedisp *linedisp);
+	bool no_boot_message;
 };
 
 /**

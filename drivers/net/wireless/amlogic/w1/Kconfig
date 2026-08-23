@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0
+config W1_AML
+	tristate "Amlogic W1 (W155S1 / AW3155) SDIO Wi-Fi"
+	depends on MMC && CFG80211
+	depends on ARCH_MESON || COMPILE_TEST
+	help
+	  Support for the Amlogic W1 Wi-Fi part found on Amlogic boards,
+	  attached over SDIO. The chip brings its own MAC layer, so this
+	  driver talks to cfg80211 directly and does not use mac80211.
+
+	  RF calibration is read at probe time through the firmware loader
+	  as aml/aml_wifi_rf_<serial>.txt, falling back to aml/aml_wifi_rf.txt,
+	  so those files have to be reachable in /lib/firmware.
+
+	  Built from the CoreELEC w1-aml tree; this is vendor code, not
+	  kernel-style code.

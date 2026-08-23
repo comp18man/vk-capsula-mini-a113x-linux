@@ -188,6 +188,19 @@ config KEYBOARD_QT2160
 	  This driver can also be built as a module. If so, the module
 	  will be called qt2160.
 
+config KEYBOARD_CSK05T
+	tristate "Hynitron CSK05T capacitive key controller"
+	depends on I2C
+	help
+	  Say Y here to enable support for the Hynitron CSK05T
+	  self-capacitance key controller, which reports up to five
+	  channels over I2C. The keycodes it emits come from the device
+	  tree; the driver polls, because the part's interrupt output has
+	  no working published description.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called csk05t.
+
 config KEYBOARD_CLPS711X
 	tristate "CLPS711X Keypad support"
 	depends on ARCH_CLPS711X || COMPILE_TEST

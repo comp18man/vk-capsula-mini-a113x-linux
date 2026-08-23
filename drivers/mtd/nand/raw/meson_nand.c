@@ -337,7 +337,16 @@ static void meson_nfc_cmd_access(struct nand_chip *nand, int raw, bool dir, int 
 		cmd = CMDRWGEN(DMA_DIR(dir), scrambler, NFC_ECC_BCH8_1K,
 			       NFC_CMD_SHORTMODE_ENABLE, pagesize, pages);
 	} else {
-		pagesize = nand->ecc.size >> 3;
+		/*
+		 * Bits 6..12 are the shortened ECC block size and must be
+		 * clear for an ordinary page. Regression from 04a81b4f9ba1,
+		 * which applied the eight-byte-unit conversion to this branch
+		 * too: 512 >> 3 = 64 now survives the macro's 0x7f mask and
+		 * the command comes out 0x00225004 where the vendor sends
+		 * 0x00224004. Invisible upstream because 1024 >> 3 still
+		 * masks to zero.
+		 */
+		pagesize = 0;
 		pages = len / nand->ecc.size;
 
 		cmd = CMDRWGEN(DMA_DIR(dir), scrambler, meson_chip->bch_mode,
