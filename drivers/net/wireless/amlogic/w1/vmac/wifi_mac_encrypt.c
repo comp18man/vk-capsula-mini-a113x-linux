@@ -437,7 +437,7 @@ none_demic(struct wifi_mac_key *k, struct sk_buff *skb, int hdrlen, int force)
     return 0;
 }
 
-static  void michael_mic(const unsigned char *key,
+static  void aml_michael_mic(const unsigned char *key,
                          struct sk_buff *, unsigned int off, size_t data_len,
                          unsigned char mic[WIFINET_WEP_MICLEN]);
 
@@ -521,7 +521,7 @@ tkip_enmic(struct wifi_mac_key *k, struct sk_buff *skb0, int force)
         }
         else
         {
-            michael_mic(k->wk_txmic,skb0, hdrlen, data_len - hdrlen, mic);
+            aml_michael_mic(k->wk_txmic,skb0, hdrlen, data_len - hdrlen, mic);
 
         }
         memcpy(os_skb_put(skb, k->wk_cipher->wm_miclen), mic, k->wk_cipher->wm_miclen);
@@ -564,7 +564,7 @@ tkip_demic(struct wifi_mac_key *k, struct sk_buff *skb0, int hdrlen, int force)
         wnet_vif->vif_sts.sts_rx_tkip_sw_mic_err++;
         // pr_debug("<running> %s %d \n",__func__,__LINE__);
         //dump_memory_internal(k->wk_key, WIFINET_KEYBUF_SIZE+WIFINET_MICBUF_SIZE);
-        michael_mic(k->wk_rxmic,
+        aml_michael_mic(k->wk_rxmic,
                     skb0, hdrlen, pktlen - (hdrlen + k->wk_cipher->wm_miclen),
                     mic);
         memcpy(mic0, os_skb_data(skb) + os_skb_get_pktlen(skb) - k->wk_cipher->wm_miclen,
@@ -659,7 +659,7 @@ michael_mic_hdr(const struct wifi_frame *wh0, unsigned char hdr[16])
     hdr[13] = hdr[14] = hdr[15] = 0;
 }
 
-static void michael_mic(const unsigned char *key, struct sk_buff *skb, unsigned int off, size_t data_len,
+static void aml_michael_mic(const unsigned char *key, struct sk_buff *skb, unsigned int off, size_t data_len,
     unsigned char mic[WIFINET_WEP_MICLEN])
 {
     uint8_t hdr[16];
