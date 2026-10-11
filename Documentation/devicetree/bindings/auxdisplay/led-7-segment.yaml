@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/auxdisplay/led-7-segment.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Seven-segment display made of LEDs
+
+maintainers:
+  - cmp18 <comp18man@gmail.com>
+
+description: |
+  A display of one or more seven-segment digits whose segments are LEDs of
+  one or more LED controllers rather than GPIOs. Each digit takes seven LEDs,
+  segments a to g:
+
+           -a-
+          |   |
+          f   b
+          |   |
+           -g-
+          |   |
+          e   c
+          |   |
+           -d-
+
+  A decimal point or a colon is not part of a character cell and stays a
+  plain LED.
+
+properties:
+  compatible:
+    const: led-7-segment
+
+  leds:
+    $ref: /schemas/types.yaml#/definitions/phandle-array
+    minItems: 7
+    items:
+      maxItems: 1
+    description:
+      The segment LEDs, a to g for each digit, digits from left to right. The
+      count is a multiple of seven.
+
+  default-brightness-level:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      Brightness of a lit segment. Defaults to, and is capped at, the highest
+      brightness all the LEDs support.
+
+required:
+  - compatible
+  - leds
+
+additionalProperties: false
+
+examples:
+  - |
+    display {
+        compatible = "led-7-segment";
+        leds = <&seg_a>, <&seg_b>, <&seg_c>, <&seg_d>,
+               <&seg_e>, <&seg_f>, <&seg_g>;
+    };

@@ -22,8 +22,11 @@ allOf:
 
 properties:
   compatible:
-    enum:
-      - neofidelity,ntp8918
+    oneOf:
+      - items:
+          - const: neofidelity,ntp8910a
+          - const: neofidelity,ntp8918
+      - const: neofidelity,ntp8918
 
   reg:
     enum:
@@ -39,13 +42,31 @@ properties:
     const: 0
 
   clocks:
+    minItems: 1
     maxItems: 3
 
   clock-names:
-    items:
-      - const: wck
-      - const: scl
-      - const: bck
+    oneOf:
+      - items:
+          - const: bck
+      - items:
+          - const: wck
+          - const: scl
+          - const: bck
+
+  hp-det-gpios:
+    maxItems: 1
+    description:
+      Headphone jack detect. The speaker outputs are shut down while a plug
+      is in.
+
+  interrupts:
+    maxItems: 1
+    description:
+      Interrupt on the hp-det-gpios line. Without it the line is polled.
+
+dependencies:
+  interrupts: [ hp-det-gpios ]
 
 required:
   - compatible

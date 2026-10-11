@@ -7,6 +7,7 @@ Each LED is represented as a sub-node of the device.
 Required properties:
 - compatible: one of
 	issi,is31fl3236
+	issi,is31fl3236a
 	issi,is31fl3235
 	issi,is31fl3218
 	issi,is31fl3216
@@ -15,6 +16,12 @@ Required properties:
 - reg: I2C slave address
 - address-cells : must be 1
 - size-cells : must be 0
+
+Optional properties:
+- issi,22khz-pwm : run the PWM at about 22 kHz instead of about 3 kHz, out of
+  the audible range. IS31FL3236A only.
+- issi,current-divider : 1 to 4, default 1. Divides the maximum output current
+  of every channel at once. IS31FL3236 and IS31FL3236A only.
 
 LED sub-node properties:
 - reg : LED channel number (1..N)

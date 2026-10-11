@@ -147,6 +147,7 @@ properties:
               - amlogic,s400
               - jethome,jethub-j100
               - jethome,jethub-j110
+              - vk,capsula-mini
           - const: amlogic,a113d
           - const: amlogic,meson-axg
 

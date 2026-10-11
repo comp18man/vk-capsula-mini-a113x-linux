@@ -20,7 +20,7 @@
 / {
 	model = "VK Capsula Mini (Amlogic A113X)";
 
-	compatible = "amlogic,a113d", "amlogic,meson-axg";
+	compatible = "vk,capsula-mini", "amlogic,a113d", "amlogic,meson-axg";
 
 	aliases {
 		serial0 = &uart_AO;
@@ -245,7 +245,7 @@
  * GPIOZ_4 enables the front panel, either variant.
  */
 &gpio {
-	front_panel_enable_hog {
+	front-panel-enable-hog {
 		gpio-hog;
 		gpios = <GPIOZ_4 GPIO_ACTIVE_HIGH>;
 		output-high;
@@ -267,7 +267,7 @@
 	 *
 	 * so it gates the part rather than reporting faults.
 	 */
-	amp_enable_hog {
+	amp-enable-hog {
 		gpio-hog;
 		gpios = <GPIOA_18 GPIO_ACTIVE_HIGH>;
 		output-high;
