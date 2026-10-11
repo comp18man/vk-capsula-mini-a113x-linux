@@ -10,7 +10,9 @@ title: Amlogic Bluetooth chips
 description:
   The W155S2 is an Amlogic Bluetooth and Wi-Fi combo chip. It works on
   the standard H4 protocol via a 4-wire UART interface, with baud rates
-  up to 4 Mbps.
+  up to 4 Mbps. The W155S1 has no Bluetooth enable line; its Bluetooth
+  core is powered through the chip's PMU over the Wi-Fi SDIO link, which
+  the supply describes.
 
 maintainers:
   - Yang Li <yang.li@amlogic.com>
@@ -24,6 +26,7 @@ properties:
               - amlogic,w265p1-bt
           - const: amlogic,w155s2-bt
       - enum:
+          - amlogic,w155s1-bt
           - amlogic,w155s2-bt
           - amlogic,w265s2-bt
 
@@ -44,9 +47,19 @@ properties:
 required:
   - compatible
   - clocks
-  - enable-gpios
   - vddio-supply
   - firmware-name
+
+allOf:
+  - if:
+      not:
+        properties:
+          compatible:
+            contains:
+              const: amlogic,w155s1-bt
+    then:
+      required:
+        - enable-gpios
 
 additionalProperties: false
 

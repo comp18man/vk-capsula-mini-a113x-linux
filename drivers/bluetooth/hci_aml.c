@@ -89,6 +89,7 @@ struct aml_tci_rsp {
 struct aml_device_data {
 	int iccm_offset;
 	int dccm_offset;
+	unsigned int startup_delay_ms;
 	bool is_coex;
 };
 
@@ -449,30 +450,26 @@ static int aml_parse_dt(struct aml_serdev *amldev)
 {
 	struct device *pdev = amldev->dev;
 
-	amldev->bt_en_gpio = devm_gpiod_get(pdev, "enable",
-					GPIOD_OUT_LOW);
-	if (IS_ERR(amldev->bt_en_gpio)) {
-		dev_err(pdev, "Failed to acquire enable gpios");
-		return PTR_ERR(amldev->bt_en_gpio);
-	}
+	amldev->bt_en_gpio = devm_gpiod_get_optional(pdev, "enable",
+						     GPIOD_OUT_LOW);
+	if (IS_ERR(amldev->bt_en_gpio))
+		return dev_err_probe(pdev, PTR_ERR(amldev->bt_en_gpio),
+				     "Failed to acquire enable gpios\n");
 
 	if (device_property_read_string(pdev, "firmware-name",
-					&amldev->firmware_name)) {
-		dev_err(pdev, "Failed to acquire firmware path");
-		return -ENODEV;
-	}
+					&amldev->firmware_name))
+		return dev_err_probe(pdev, -ENODEV,
+				     "Failed to acquire firmware path\n");
 
 	amldev->bt_supply = devm_regulator_get(pdev, "vddio");
-	if (IS_ERR(amldev->bt_supply)) {
-		dev_err(pdev, "Failed to acquire regulator");
-		return PTR_ERR(amldev->bt_supply);
-	}
+	if (IS_ERR(amldev->bt_supply))
+		return dev_err_probe(pdev, PTR_ERR(amldev->bt_supply),
+				     "Failed to acquire regulator\n");
 
 	amldev->lpo_clk = devm_clk_get(pdev, NULL);
-	if (IS_ERR(amldev->lpo_clk)) {
-		dev_err(pdev, "Failed to acquire clock source");
-		return PTR_ERR(amldev->lpo_clk);
-	}
+	if (IS_ERR(amldev->lpo_clk))
+		return dev_err_probe(pdev, PTR_ERR(amldev->lpo_clk),
+				     "Failed to acquire clock source\n");
 
 	return 0;
 }
@@ -604,8 +601,7 @@ static int aml_setup(struct hci_uart *hu)
 	if (err)
 		return err;
 
-	/* Wait 60ms for controller startup */
-	msleep(60);
+	msleep(amldev->aml_dev_data->startup_delay_ms);
 
 	err = aml_dump_fw_version(hdev);
 	if (err)
@@ -677,9 +673,9 @@ static const struct hci_uart_proto aml_hci_proto = {
 	.dequeue	= aml_dequeue,
 };
 
-static void aml_device_driver_shutdown(struct device *dev)
+static void aml_serdev_shutdown(struct serdev_device *serdev)
 {
-	struct aml_serdev *amldev = dev_get_drvdata(dev);
+	struct aml_serdev *amldev = serdev_device_get_drvdata(serdev);
 
 	aml_power_off(amldev);
 }
@@ -714,15 +710,24 @@ static void aml_serdev_remove(struct serdev_device *serdev)
 	hci_uart_unregister_device(&amldev->serdev_hu);
 }
 
+static const struct aml_device_data data_w155s1 = {
+	.iccm_offset = 256 * 1024,
+	/* what Amlogic's aml_hciattach waits; after 60 ms 0xfc1a times out */
+	.startup_delay_ms = 600,
+};
+
 static const struct aml_device_data data_w155s2 = {
 	.iccm_offset = 256 * 1024,
+	.startup_delay_ms = 60,
 };
 
 static const struct aml_device_data data_w265s2 = {
 	.iccm_offset = 384 * 1024,
+	.startup_delay_ms = 60,
 };
 
 static const struct of_device_id aml_bluetooth_of_match[] = {
+	{ .compatible = "amlogic,w155s1-bt", .data = &data_w155s1 },
 	{ .compatible = "amlogic,w155s2-bt", .data = &data_w155s2 },
 	{ .compatible = "amlogic,w265s2-bt", .data = &data_w265s2 },
 	{ /* sentinel */ },
@@ -732,10 +737,10 @@ MODULE_DEVICE_TABLE(of, aml_bluetooth_of_match);
 static struct serdev_device_driver aml_serdev_driver = {
 	.probe = aml_serdev_probe,
 	.remove = aml_serdev_remove,
+	.shutdown = aml_serdev_shutdown,
 	.driver = {
 		.name = "hci_uart_aml",
 		.of_match_table = aml_bluetooth_of_match,
-		.shutdown = aml_device_driver_shutdown,
 	},
 };
 

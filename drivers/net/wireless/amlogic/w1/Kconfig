@@ -1,16 +1,23 @@
 # SPDX-License-Identifier: GPL-2.0
 config W1_AML
-	tristate "Amlogic W1 (W155S1 / AW3155) SDIO Wi-Fi"
-	depends on MMC && CFG80211
+	tristate "Amlogic W1 (W155S1 / AW3155) SDIO Wi-Fi and Bluetooth power"
+	depends on MMC && CFG80211 && REGULATOR
 	depends on ARCH_MESON || COMPILE_TEST
 	help
-	  Support for the Amlogic W1 Wi-Fi part found on Amlogic boards,
-	  attached over SDIO. The chip brings its own MAC layer, so this
+	  Support for the SDIO side of the Amlogic W1 combo chip found on
+	  Amlogic boards: the Wi-Fi itself, and the power switch for its
+	  Bluetooth part. The chip brings its own MAC layer, so the Wi-Fi
 	  driver talks to cfg80211 directly and does not use mac80211.
 
 	  RF calibration is read at probe time through the firmware loader
 	  as aml/aml_wifi_rf_<serial>.txt, falling back to aml/aml_wifi_rf.txt,
 	  so those files have to be reachable in /lib/firmware.
+
+	  Bluetooth runs over a UART and is driven by BT_HCIUART_AML, but
+	  its core has no enable line and is powered through the chip's PMU
+	  over SDIO, so it needs this driver as well. When the device tree
+	  gives the SDIO function 1 node a "regulator" child, the driver
+	  registers it, and hci_aml takes it as its vddio-supply.
 
 	  Built from the CoreELEC w1-aml tree; this is vendor code, not
 	  kernel-style code.

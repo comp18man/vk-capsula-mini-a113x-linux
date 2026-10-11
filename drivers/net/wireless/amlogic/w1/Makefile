@@ -15,6 +15,7 @@ obj-$(CONFIG_W1_AML) += aml_sdio.o
 obj-$(CONFIG_W1_AML) += vlsicomm.o
 
 aml_sdio-y := vmac/w1_sdio/w1_sdio.o
+aml_sdio-y += vmac/w1_sdio/w1_bt_power.o
 
 vlsicomm-y += vmac/aml_compat.o
 vlsicomm-y += vmac/rc80211_minstrel.o

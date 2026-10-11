@@ -855,6 +855,7 @@ static int aml_w1_sdio_probe(struct sdio_func *func, const struct sdio_device_id
     }
 
     aml_w1_sdio_init_ops();
+    w1_bt_power_register(w1_g_w1_hwif_sdio.sdio_func_if[SDIO_FUNC1]);
 
     return ret;
 

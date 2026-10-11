@@ -183,6 +183,13 @@ struct amlw1_hif_ops {
     int (*hif_suspend)(unsigned int suspend_enable);
 };
 
+extern struct amlw1_hwif_sdio w1_g_w1_hwif_sdio;
+extern struct amlw1_hif_ops w1_g_w1_hif_ops;
+extern unsigned char w1_wifi_in_insmod;
+extern unsigned char (*w1_host_wake_w1_req)(void);
+
 void w1_aml_wifi_sdio_power_lock(void);
 void w1_aml_wifi_sdio_power_unlock(void);
+void w1_set_wifi_bt_sdio_driver_bit(bool is_register, int shift);
+int w1_bt_power_register(struct sdio_func *func);
 void *w1_aml_mem_prealloc(int section, unsigned long size);

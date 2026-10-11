@@ -79,8 +79,9 @@
 	};
 
 	/*
-	 * Wi-Fi reference clock. The stock tree muxes PWM_A onto pwm_a_x20
-	 * and calls the group wifi_32k_pins; 30518 ns is 32.768 kHz.
+	 * W1 reference clock, for Wi-Fi and Bluetooth alike. The stock tree
+	 * muxes PWM_A onto pwm_a_x20 and calls the group wifi_32k_pins;
+	 * 30518 ns is 32.768 kHz.
 	 */
 	wifi32k: wifi32k {
 		compatible = "pwm-clock";
@@ -584,7 +585,7 @@
 	};
 };
 
-/* PWM_A, used only as the Wi-Fi 32.768 kHz reference. */
+/* PWM_A, used only as the W1 32.768 kHz reference. */
 &pwm_ab {
 	status = "okay";
 	pinctrl-0 = <&pwm_a_x20_pins>;
@@ -592,9 +593,9 @@
 };
 
 /*
- * SDIO, carrying only the Amlogic W1 Wi-Fi part. No child node: the driver
- * binds by SDIO vendor/device id, not by compatible. Stock runs this bus
- * at SDR104.
+ * SDIO, carrying the Amlogic W1. The driver binds by SDIO vendor/device id,
+ * not by compatible, the function 1 node is there only for the regulator
+ * through which it powers the Bluetooth core. Stock runs this bus at SDR104.
  */
 &sd_emmc_b {
 	status = "okay";
@@ -617,6 +618,33 @@
 
 	vmmc-supply = <&vddao_3v3>;
 	vqmmc-supply = <&vddio_boot>;
+
+	wifi@1 {
+		reg = <1>;
+
+		w1_bt: regulator {
+			regulator-name = "w1-bt";
+		};
+	};
+};
+
+/*
+ * W1 Bluetooth, H4 with flow control; stock runs it at 4 Mbaud. There is
+ * no enable line, the core is powered through w1_bt. Stock also declares
+ * host-wake on GPIOX_21 and bt-wake on GPIOX_22, which hci_aml does not use.
+ */
+&uart_A {
+	status = "okay";
+	pinctrl-0 = <&uart_a_pins>, <&uart_a_cts_rts_pins>;
+	pinctrl-names = "default";
+	uart-has-rtscts;
+
+	bluetooth {
+		compatible = "amlogic,w155s1-bt";
+		clocks = <&wifi32k>;
+		vddio-supply = <&w1_bt>;
+		firmware-name = "aml/w1_bt_fw_uart.bin";
+	};
 };
 
 &sd_emmc_c {
