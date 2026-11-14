@@ -19,9 +19,52 @@
 
 #define DRV_NAME	"vk-capsula-mini-prober"
 
+#define CAPSULA_NTP_GIEC	"8910a_giec-capsula-mini.bin"
+
+static char *factory;
+module_param(factory, charp, 0444);
+MODULE_PARM_DESC(factory, "Unifykey \"factory\" as read by the bootloader");
+
 static const struct i2c_of_probe_cfg capsula_amplifier = {
 	.type = "audio-codec",
 };
+
+static void capsula_pick_tuning(struct device *dev)
+{
+	const char *name;
+	int ret;
+
+	if (!factory || !strcmp(factory, "taide"))
+		return;
+
+	struct device_node *np __free(device_node) =
+		of_find_compatible_node(NULL, NULL, "neofidelity,ntp8910a");
+	if (!np)
+		return;
+
+	if (!of_property_read_string(np, "firmware-name", &name) &&
+	    !strcmp(name, CAPSULA_NTP_GIEC))
+		return;
+
+	struct of_changeset *ocs __free(kfree) =
+		kzalloc(sizeof(*ocs), GFP_KERNEL);
+	if (!ocs)
+		return;
+
+	of_changeset_init(ocs);
+	ret = of_changeset_update_prop_string(ocs, np, "firmware-name",
+					      CAPSULA_NTP_GIEC);
+	if (!ret)
+		ret = of_changeset_apply(ocs);
+	if (ret) {
+		of_changeset_destroy(ocs);
+		dev_warn(dev, "factory %s, giec tuning not set: %d\n",
+			 factory, ret);
+		return;
+	}
+
+	retain_and_null_ptr(ocs);
+}
 
 static bool capsula_not_fitted(struct device_node *np)
 {
@@ -106,6 +149,8 @@ static int capsula_trim_card(struct device *dev)
 static int capsula_prober_probe(struct platform_device *pdev)
 {
 	int ret;
+
+	capsula_pick_tuning(&pdev->dev);
 
 	ret = i2c_of_probe_component(&pdev->dev, &capsula_amplifier, NULL);
 	if (ret)

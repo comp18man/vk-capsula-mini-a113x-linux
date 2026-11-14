@@ -54,6 +54,12 @@ properties:
           - const: scl
           - const: bck
 
+  firmware-name:
+    maxItems: 1
+    description:
+      Register profile for the part, written before the first playback.
+      Defaults to eq_8918.bin.
+
   hp-det-gpios:
     maxItems: 1
     description:

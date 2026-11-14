@@ -57,6 +57,24 @@
 	};
 
 	/*
+	 * For vendor U-Boot's keyman, not for Linux: the boot environment
+	 * reads the factory key through these and passes it to the prober.
+	 */
+	efusekey {
+		keynum = <0>;
+	};
+
+	unifykey {
+		unifykey-num = <1>;
+
+		key_0 {
+			key-name = "factory";
+			key-device = "normal";
+			key-permit = "read";
+		};
+	};
+
+	/*
 	 * meson-gx-mmc takes ocr_avail from the vmmc regulator alone: without one
 	 * the range is empty and the core says "no support for card's volts".
 	 * 3.3 V card, 1.8 V I/O, which is what SDR104 needs.
@@ -423,6 +441,8 @@
 		reset-gpios = <&gpio GPIOA_17 GPIO_ACTIVE_LOW>;
 		clocks = <&clkc_audio AUD_CLKID_MST_C_SCLK>;
 		clock-names = "bck";
+
+		firmware-name = "8910a_taide-capsula-mini.bin";
 
 		/*
 		 * The socket shorts this to ground when a plug goes in and the

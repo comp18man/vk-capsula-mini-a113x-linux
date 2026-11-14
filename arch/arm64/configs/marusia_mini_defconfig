@@ -154,7 +154,7 @@ CONFIG_BT_HCIUART_SERDEV=y
 CONFIG_BT_HCIUART_H4=y
 CONFIG_BT_HCIUART_AML=y
 
-CONFIG_EXTRA_FIRMWARE="eq_8918.bin acm8615-capsula-mini.bin"
+CONFIG_EXTRA_FIRMWARE="8910a_taide-capsula-mini.bin 8910a_giec-capsula-mini.bin acm8615-capsula-mini.bin"
 CONFIG_EXTRA_FIRMWARE_DIR="firmware"
 
 # CONFIG_EFI is not set

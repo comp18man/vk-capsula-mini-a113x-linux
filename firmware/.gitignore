@@ -1,6 +1,7 @@
 # The top-level .gitignore hides *.bin as a build artefact, which also hides the
 # vendor blobs kept here on purpose. CONFIG_EXTRA_FIRMWARE names the amplifier
 # profiles, so a clone without them does not build at all.
-!eq_8918.bin
+!8910a_taide-capsula-mini.bin
+!8910a_giec-capsula-mini.bin
 !acm8615-capsula-mini.bin
 !aml/w1_bt_fw_uart.bin

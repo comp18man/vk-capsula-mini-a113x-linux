@@ -14,6 +14,7 @@
 #include <linux/regmap.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
+#include <linux/property.h>
 
 #include <sound/initval.h>
 #include <sound/core.h>
@@ -61,6 +62,7 @@ struct ntp8918_priv {
 	struct i2c_client *i2c;
 	struct clk *bck;
 	struct reset_control *reset;
+	const char *fw_name;
 	unsigned int format;
 	unsigned int slots;
 	unsigned int slot_width;
@@ -136,10 +138,10 @@ static int ntp8918_load_firmware(struct ntp8918_priv *ntp8918)
 {
 	int ret;
 
-	ret = ntpfw_load(ntp8918->i2c, NTP8918_FW_NAME, NTP8918_FW_MAGIC);
+	ret = ntpfw_load(ntp8918->i2c, ntp8918->fw_name, NTP8918_FW_MAGIC);
 	if (ret == -ENOENT) {
 		dev_warn_once(&ntp8918->i2c->dev, "Could not find firmware %s\n",
-			      NTP8918_FW_NAME);
+			      ntp8918->fw_name);
 		return 0;
 	}
 
@@ -562,6 +564,10 @@ static int ntp8918_i2c_probe(struct i2c_client *i2c)
 		return -ENOMEM;
 
 	ntp8918->i2c = i2c;
+
+	ntp8918->fw_name = NTP8918_FW_NAME;
+	device_property_read_string(&i2c->dev, "firmware-name",
+				    &ntp8918->fw_name);
 
 	ret = devm_mutex_init(&i2c->dev, &ntp8918->mute_lock);
 	if (ret)
