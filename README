@@ -1,17 +1,18 @@
-# Свежее майнлайн ядро Linux для умной колонки VK Capsula Mini на Amlogic A113X (не путать с версией на Rockchip RK3308B).
+Linux kernel
+============
 
-## Что работает:
--Звук (NTP8910A и ACM8615) (+jack 3.5)
--Микрофон
--WIFI+BT
--Экран (IS31FL3236A и AW21036)
--Сенсорные кнопки
--Светодиодное кольцо
--Датчик освещенности
--USB Type-C
+There are several guides for kernel developers and users. These guides can
+be rendered in a number of formats, like HTML and PDF. Please read
+Documentation/admin-guide/README.rst first.
 
+In order to build the documentation, use ``make htmldocs`` or
+``make pdfdocs``.  The formatted documentation can also be read online at:
 
-## Подробная статья о железе колонки:
-https://debianlive.ru/2026/08/vk-mini-legacy-amlogic-a113x-%d1%87%d0%b0%d1%81%d1%82%d1%8c-1-%d1%81%d1%82%d0%b0%d0%b2%d0%b8%d0%bc-alpine-%d1%81%d0%be-%d1%81%d0%b2%d0%b5%d0%b6%d0%b8%d0%bc-%d0%bc%d0%b0%d0%b9%d0%bd%d0%bb%d0%b0/
+    https://www.kernel.org/doc/html/latest/
 
-По этой же ссылке найдете и сборку Alpine Linux для этой колонки на этом ядре (в конце статьи или в меню сайта).
+There are various text files in the Documentation/ subdirectory,
+several of them using the reStructuredText markup notation.
+
+Please read the Documentation/process/changes.rst file, as it contains the
+requirements for building and running the kernel, and information about
+the problems which may result by upgrading your kernel.
