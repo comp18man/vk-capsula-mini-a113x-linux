@@ -135,6 +135,18 @@ config LEDS_AW2013
 	  To compile this driver as a module, choose M here: the module
 	  will be called leds-aw2013.
 
+config LEDS_AW21036
+	tristate "LED support for Awinic AW21036"
+	depends on LEDS_CLASS
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  This option enables support for the Awinic AW21036 36-channel
+	  constant-current LED driver, each channel driven as its own LED.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called leds-aw21036.
+
 config LEDS_BCM6328
 	tristate "LED Support for Broadcom BCM6328"
 	depends on LEDS_CLASS

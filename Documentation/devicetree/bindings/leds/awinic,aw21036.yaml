@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/leds/awinic,aw21036.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Awinic AW21036 36-channel LED driver
+
+maintainers:
+  - cmp18 <comp18man@gmail.com>
+
+description:
+  The AW21036 sinks 36 constant-current channels, LED1 to LED36, each with its
+  own 8-bit PWM duty and 8-bit current scale, under one 8-bit global current
+  whose full scale is set by the resistor on ISET.
+
+properties:
+  compatible:
+    const: awinic,aw21036
+
+  reg:
+    enum: [0x34, 0x35, 0x36, 0x37]
+
+  "#address-cells":
+    const: 1
+
+  "#size-cells":
+    const: 0
+
+  enable-gpios:
+    maxItems: 1
+    description: EN pin. The part stays in standby while it is low.
+
+  awinic,current-divider:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    enum: [1, 2, 3, 4]
+    default: 1
+    description:
+      Divides the global current, and so the current of every channel, by
+      this factor. The same setting as issi,current-divider of the IS31FL32xx
+      parts, for boards built with either.
+
+patternProperties:
+  "^led@[0-9a-f]+$":
+    type: object
+    $ref: common.yaml#
+    unevaluatedProperties: false
+
+    properties:
+      reg:
+        description: Channel, counted as the LED1 to LED36 pins.
+        minimum: 1
+        maximum: 36
+
+    required:
+      - reg
+
+required:
+  - compatible
+  - reg
+  - "#address-cells"
+  - "#size-cells"
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/leds/common.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        led-controller@34 {
+            compatible = "awinic,aw21036";
+            reg = <0x34>;
+            #address-cells = <1>;
+            #size-cells = <0>;
+            enable-gpios = <&gpio 4 GPIO_ACTIVE_HIGH>;
+            awinic,current-divider = <2>;
+
+            led@1 {
+                reg = <1>;
+                function = LED_FUNCTION_STATUS;
+                color = <LED_COLOR_ID_WHITE>;
+            };
+
+            led@24 {
+                reg = <36>;
+                function = LED_FUNCTION_INDICATOR;
+                color = <LED_COLOR_ID_WHITE>;
+            };
+        };
+    };

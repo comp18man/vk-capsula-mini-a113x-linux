@@ -99,8 +99,10 @@ config VK_CAPSULA_MINI_PROBER
 	help
 	  The VK Capsula Mini is built with one of two speaker amplifiers on
 	  the same footprint. Both are in its device tree; this enables the
-	  one that is fitted and points the sound card at it. It also picks
-	  the NTP8910A tuning by the factory the bootloader passes in.
+	  one that is fitted and points the sound card at it. The same goes
+	  for its two front panel controllers and the display on each. It
+	  also picks the NTP8910A tuning by the factory the bootloader passes
+	  in.
 
 	  Say Y here if the kernel is to run on that board.
 

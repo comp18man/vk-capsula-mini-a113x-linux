@@ -132,13 +132,25 @@
 	 *
 	 * The colon stays out of this list, it is not part of a character cell.
 	 */
-	display {
+	display-0 {
 		compatible = "led-7-segment";
 
 		leds = <&d4d>, <&d4e>, <&d4f>, <&d4a>, <&d4b>, <&d4c>, <&d4g>,
 		       <&d3d>, <&d3e>, <&d3f>, <&d3a>, <&d3b>, <&d3c>, <&d3g>,
 		       <&d2d>, <&d2e>, <&d2f>, <&d2a>, <&d2b>, <&d2c>, <&d2g>,
 		       <&d1d>, <&d1e>, <&d1f>, <&d1a>, <&d1b>, <&d1c>, <&d1g>;
+		status = "fail-needs-probe";
+	};
+
+	/* The same display on the AW21036 */
+	display-1 {
+		compatible = "led-7-segment";
+
+		leds = <&aw_d4d>, <&aw_d4e>, <&aw_d4f>, <&aw_d4a>, <&aw_d4b>, <&aw_d4c>, <&aw_d4g>,
+		       <&aw_d3d>, <&aw_d3e>, <&aw_d3f>, <&aw_d3a>, <&aw_d3b>, <&aw_d3c>, <&aw_d3g>,
+		       <&aw_d2d>, <&aw_d2e>, <&aw_d2f>, <&aw_d2a>, <&aw_d2b>, <&aw_d2c>, <&aw_d2g>,
+		       <&aw_d1d>, <&aw_d1e>, <&aw_d1f>, <&aw_d1a>, <&aw_d1b>, <&aw_d1c>, <&aw_d1g>;
+		status = "fail-needs-probe";
 	};
 
 	/*
@@ -301,8 +313,8 @@
 
 /*
  * i2c1: touch keys, light sensor, front panel. The panel is an IS31FL3236
- * at 0x3c or an AW21036 at 0x34 depending on batch; only the IS31 is
- * declared. AW21036 commented below as wiring reference.
+ * at 0x3c or an AW21036 at 0x34 depending on batch; the prober enables the
+ * one fitted and its display with it.
  */
 &i2c1 {
 	status = "okay";
@@ -322,6 +334,7 @@
 		issi,current-divider = <2>;
 		#address-cells = <1>;
 		#size-cells = <0>;
+		status = "fail-needs-probe";
 
 		/*
 		 * Channel-to-segment map, found by lighting one channel at a time: digit 1
@@ -378,21 +391,48 @@
 	};
 
 	/*
-	 * AW21036, the other panel variant, 30 channels, same clock-ledN meaning.
-	 * leds-aw200xx.c is the AW20036 and is NOT this part. The driver is
-	 * ordinary work; kept commented out because board on hand carries
-	 * the IS31FL3236 and there is nothing to test it on.
-	 *
-	 * led-controller@34 {
-	 *	compatible = "awinic,aw21036";
-	 *	reg = <0x34>;
-	 *	#address-cells = <1>;
-	 *	#size-cells = <0>;
-	 *	enable-gpios = <&gpio GPIOZ_4 GPIO_ACTIVE_HIGH>;
-	 *	... led@1 .. led@30, reg = <1>..<30> ...
-	 * };
-	 *
+	 * Stock drives both panels through one clock-ledN table, every segment sits on
+	 * the same channel as on the IS31, so the map is the same.
 	 */
+	led-controller@34 {
+		compatible = "awinic,aw21036";
+		reg = <0x34>;
+		awinic,current-divider = <2>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "fail-needs-probe";
+
+		aw_d2d: led@1  { reg = <1>;  label = "clock:d2:d"; };
+		aw_d4d: led@2  { reg = <2>;  label = "clock:d4:d"; };
+		aw_d2e: led@3  { reg = <3>;  label = "clock:d2:e"; };
+		aw_d2g: led@4  { reg = <4>;  label = "clock:d2:g"; };
+		aw_d2c: led@5  { reg = <5>;  label = "clock:d2:c"; };
+		aw_d2a: led@6  { reg = <6>;  label = "clock:d2:a"; };
+		aw_d2b: led@7  { reg = <7>;  label = "clock:d2:b"; };
+		aw_d2f: led@8  { reg = <8>;  label = "clock:d2:f"; };
+		aw_d1c: led@9  { reg = <9>;  label = "clock:d1:c"; };
+		aw_d1g: led@a  { reg = <10>; label = "clock:d1:g"; };
+		aw_d1d: led@b  { reg = <11>; label = "clock:d1:d"; };
+		aw_d1f: led@c  { reg = <12>; label = "clock:d1:f"; };
+		aw_d1e: led@d  { reg = <13>; label = "clock:d1:e"; };
+		aw_d1b: led@e  { reg = <14>; label = "clock:d1:b"; };
+		aw_d1a: led@f  { reg = <15>; label = "clock:d1:a"; };
+		led@10         { reg = <16>; label = "clock:colon:bottom"; };
+		led@11         { reg = <17>; label = "clock:colon:top"; };
+		aw_d4a: led@12 { reg = <18>; label = "clock:d4:a"; };
+		aw_d3a: led@13 { reg = <19>; label = "clock:d3:a"; };
+		aw_d3f: led@14 { reg = <20>; label = "clock:d3:f"; };
+		aw_d3g: led@15 { reg = <21>; label = "clock:d3:g"; };
+		aw_d4f: led@16 { reg = <22>; label = "clock:d4:f"; };
+		aw_d4b: led@17 { reg = <23>; label = "clock:d4:b"; };
+		aw_d3b: led@18 { reg = <24>; label = "clock:d3:b"; };
+		aw_d4g: led@19 { reg = <25>; label = "clock:d4:g"; };
+		aw_d3e: led@1a { reg = <26>; label = "clock:d3:e"; };
+		aw_d3d: led@1b { reg = <27>; label = "clock:d3:d"; };
+		aw_d3c: led@1c { reg = <28>; label = "clock:d3:c"; };
+		aw_d4e: led@1d { reg = <29>; label = "clock:d4:e"; };
+		aw_d4c: led@1e { reg = <30>; label = "clock:d4:c"; };
+	};
 
 	/*
 	 * Hynitron CSK05T capacitive keys, five channels at 0x15.

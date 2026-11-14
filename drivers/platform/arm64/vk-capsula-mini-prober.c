@@ -2,9 +2,11 @@
 /*
  * VK Capsula Mini second-source parts
  *
- * The board is built with one of two speaker amplifiers on one I2C footprint.
- * Every candidate is marked "fail-needs-probe", the one that responds is enabled, and the sound card
- * loses its references to the rest, since a card waits for every codec it names.
+ * The board is built with one of two speaker amplifiers and one of two front
+ * panel controllers. Every candidate is marked "fail-needs-probe" and the one
+ * that responds is enabled. The sound card then loses its references to the
+ * rest, since a card waits for every codec it names, and the display drawn on
+ * the enabled panel's LEDs is enabled with it.
  */
 
 #include <linux/cleanup.h>
@@ -27,6 +29,10 @@ MODULE_PARM_DESC(factory, "Unifykey \"factory\" as read by the bootloader");
 
 static const struct i2c_of_probe_cfg capsula_amplifier = {
 	.type = "audio-codec",
+};
+
+static const struct i2c_of_probe_cfg capsula_panel = {
+	.type = "led-controller",
 };
 
 static void capsula_pick_tuning(struct device *dev)
@@ -146,6 +152,73 @@ static int capsula_trim_card(struct device *dev)
 	return 0;
 }
 
+static int capsula_enable(struct device_node *np)
+{
+	int ret;
+
+	struct of_changeset *ocs __free(kfree) =
+		kzalloc(sizeof(*ocs), GFP_KERNEL);
+	if (!ocs)
+		return -ENOMEM;
+
+	of_changeset_init(ocs);
+	ret = of_changeset_update_prop_string(ocs, np, "status", "okay");
+	if (!ret)
+		ret = of_changeset_apply(ocs);
+	if (ret) {
+		of_changeset_destroy(ocs);
+		return ret;
+	}
+
+	retain_and_null_ptr(ocs);
+
+	return 0;
+}
+
+/*
+ * The IS31FL3236A takes no reads:
+ * it is the panel left over when the AW21036 stays silent.
+ */
+static int capsula_pick_panel(struct device *dev)
+{
+	int ret;
+
+	ret = i2c_of_probe_component(dev, &capsula_panel, NULL);
+	if (ret != -ENODEV)
+		return ret;
+
+	struct device_node *np __free(device_node) =
+		of_find_compatible_node(NULL, NULL, "issi,is31fl3236a");
+	if (!np)
+		return ret;
+
+	return capsula_enable(np);
+}
+
+static int capsula_pick_display(void)
+{
+	struct device_node *np;
+	int ret;
+
+	for_each_compatible_node(np, NULL, "led-7-segment") {
+		if (!capsula_not_fitted(np))
+			continue;
+
+		struct device_node *led __free(device_node) =
+			of_parse_phandle(np, "leds", 0);
+		struct device_node *panel __free(device_node) =
+			of_get_parent(led);
+
+		if (panel && of_device_is_available(panel)) {
+			ret = capsula_enable(np);
+			of_node_put(np);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 static int capsula_prober_probe(struct platform_device *pdev)
 {
 	int ret;
@@ -156,7 +229,15 @@ static int capsula_prober_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	return capsula_trim_card(&pdev->dev);
+	ret = capsula_trim_card(&pdev->dev);
+	if (ret)
+		return ret;
+
+	ret = capsula_pick_panel(&pdev->dev);
+	if (ret)
+		return ret;
+
+	return capsula_pick_display();
 }
 
 static struct platform_driver capsula_prober_driver = {
