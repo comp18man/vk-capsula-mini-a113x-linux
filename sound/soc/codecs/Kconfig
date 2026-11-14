@@ -17,6 +17,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_88PM860X
 	imply SND_SOC_AB8500_CODEC
 	imply SND_SOC_AC97_CODEC
+	imply SND_SOC_ACM8615
 	imply SND_SOC_AD1836
 	imply SND_SOC_AD193X_SPI
 	imply SND_SOC_AD193X_I2C
@@ -432,6 +433,15 @@ config SND_SOC_AC97_CODEC
 	select SND_AC97_CODEC
 	select SND_SOC_AC97_BUS
 
+config SND_SOC_ACM8615
+	tristate "ACME Semiconductor ACM8615 amplifier"
+	depends on I2C
+	select REGMAP_I2C
+	select SND_SOC_AMP_HP_DET
+	help
+	  Enable support for the ACME Semiconductor ACM8615, a mono class-D
+	  amplifier with digital audio input and a built-in DSP.
+
 config SND_SOC_AD1836
 	tristate
 	depends on SPI_MASTER
@@ -651,6 +661,9 @@ config SND_SOC_ALC5623
 config SND_SOC_ALC5632
 	tristate
 	depends on I2C
+
+config SND_SOC_AMP_HP_DET
+	tristate
 
 config SND_SOC_AUDIO_IIO_AUX
 	tristate "Audio IIO Auxiliary device"
@@ -2748,6 +2761,7 @@ config SND_SOC_NTPFW
 	tristate
 
 config SND_SOC_NTP8918
+	select SND_SOC_AMP_HP_DET
 	select SND_SOC_NTPFW
 	tristate "NeoFidelity NTP8918 amplifier"
 	depends on I2C

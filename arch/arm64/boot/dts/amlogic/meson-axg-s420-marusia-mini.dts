@@ -176,15 +176,17 @@
 		/*
 		 * Speaker path: TX on lane 0 (tdmc_dout0).
 		 *
-		 * The RX mask below is declared but inert: ntp8918 offers no capture
-		 * DAI, so this link has no capture direction and TDMIN_C never runs.
-		 * Echo cancellation takes its reference from the SoC-internal TDM_C
-		 * loopback instead. Kept because the wiring is real -- the amplifier's
-		 * MONITOR_1 pin reaches tdmc_din1 -- and one .capture block in the
-		 * codec would make it live.
+		 * Two codecs. The prober drops the one that is not fitted.
+		 *
+		 * The RX mask below is declared but inert: neither amplifier driver
+		 * offers a capture DAI, so this link has no capture direction and
+		 * TDMIN_C never runs. Echo cancellation takes its reference from the
+		 * SoC-internal TDM_C loopback instead. Kept because the wiring is
+		 * real -- the NTP8910A's MONITOR_1 pin reaches tdmc_din1 -- and one
+		 * .capture block in the codec would make it live.
 		 *
 		 * The 32-bit slot width is load-bearing: omit it and axg-card passes 0,
-		 * 16-bit samples give a 1.536 MHz bit clock, and the amplifier takes only
+		 * 16-bit samples give a 1.536 MHz bit clock, and the NTP8910A takes only
 		 * 2.048, 2.8224, 3.072 or 6.144.
 		 */
 		dai-link-3 {
@@ -196,8 +198,12 @@
 			dai-tdm-slot-rx-mask-1 = <1 1>;
 			mclk-fs = <256>;
 
-			codec {
+			codec-0 {
 				sound-dai = <&ntp8910a>;
+			};
+
+			codec-1 {
+				sound-dai = <&acm8615>;
 			};
 		};
 
@@ -397,7 +403,9 @@
 	};
 };
 
-/* i2c3 (cbus 0x1c000). Amplifier only. */
+/*
+ * i2c3 (cbus 0x1c000). Amplifier only: NTP8910A or ACM8615
+ */
 &i2c3 {
 	status = "okay";
 	pinctrl-0 = <&i2c3_a19_pu_pins>;
@@ -441,6 +449,21 @@
 		 */
 		interrupt-parent = <&gpio_intc>;
 		interrupts = <4 IRQ_TYPE_EDGE_FALLING>;
+		status = "fail-needs-probe";
+	};
+
+	/*
+	 * No power-down pin on this part
+	 */
+	acm8615: audio-codec@34 {
+		compatible = "acmesemi,acm8615";
+		reg = <0x34>;
+		#sound-dai-cells = <0>;
+		firmware-name = "acm8615-capsula-mini.bin";
+		hp-det-gpios = <&gpio_ao GPIOAO_4 GPIO_ACTIVE_LOW>;
+		interrupt-parent = <&gpio_intc>;
+		interrupts = <4 IRQ_TYPE_EDGE_FALLING>;
+		status = "fail-needs-probe";
 	};
 };
 

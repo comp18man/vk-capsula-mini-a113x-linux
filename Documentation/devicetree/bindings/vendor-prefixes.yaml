@@ -46,6 +46,8 @@ patternProperties:
     description: Acer Inc.
   "^acme,.*":
     description: Acme Systems srl
+  "^acmesemi,.*":
+    description: ACME Semiconductor
   "^actions,.*":
     description: Actions Semiconductor Co., Ltd.
   "^actiontec,.*":

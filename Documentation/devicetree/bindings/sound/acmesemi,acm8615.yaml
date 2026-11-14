@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/sound/acmesemi,acm8615.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: ACME Semiconductor ACM8615 mono class-D amplifier
+
+maintainers:
+  - cmp18 <comp18man@gmail.com>
+
+description:
+  The ACM8615 is a mono class-D amplifier with an I2S/TDM input, no MCLK, and
+  a DSP whose coefficient memory is filled from a profile made by the vendor
+  tuning tool. It has no power-down pin.
+
+allOf:
+  - $ref: dai-common.yaml#
+
+properties:
+  compatible:
+    const: acmesemi,acm8615
+
+  reg:
+    enum:
+      - 0x34
+      - 0x35
+      - 0x36
+      - 0x37
+
+  '#sound-dai-cells':
+    const: 0
+
+  dvdd-supply:
+    description: Digital and I/O supply, 1.8 V or 3.3 V.
+
+  pvdd-supply:
+    description: Power stage supply, 4.5 V to 21 V.
+
+  firmware-name:
+    maxItems: 1
+    description:
+      DSP profile from the vendor tuning tool, register/value byte pairs with
+      page changes written to register 0. Without it the part runs on its
+      reset defaults.
+
+  hp-det-gpios:
+    maxItems: 1
+    description:
+      Headphone jack detect. The speaker output is muted while a plug is in.
+
+  interrupts:
+    maxItems: 1
+    description:
+      Interrupt on the hp-det-gpios line. Without it the line is polled.
+
+dependencies:
+  interrupts: [ hp-det-gpios ]
+
+required:
+  - compatible
+  - reg
+  - '#sound-dai-cells'
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        audio-codec@34 {
+            compatible = "acmesemi,acm8615";
+            reg = <0x34>;
+            #sound-dai-cells = <0>;
+            firmware-name = "acm8615-speaker.bin";
+            hp-det-gpios = <&gpio 4 GPIO_ACTIVE_LOW>;
+            interrupt-parent = <&gpio_intc>;
+            interrupts = <4 IRQ_TYPE_EDGE_FALLING>;
+        };
+    };

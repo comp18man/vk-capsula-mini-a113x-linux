@@ -9,11 +9,6 @@
 
 #include <linux/kernel.h>
 #include <linux/reset.h>
-#include <linux/gpio/consumer.h>
-#include <linux/workqueue.h>
-#include <linux/interrupt.h>
-#include <linux/irq.h>
-#include <linux/delay.h>
 #include <linux/mutex.h>
 #include <linux/i2c.h>
 #include <linux/regmap.h>
@@ -28,6 +23,7 @@
 #include <sound/soc-component.h>
 #include <sound/tlv.h>
 
+#include "amp-hp-det.h"
 #include "ntpfw.h"
 
 #define NTP8918_RATES   (SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_44100 | \
@@ -75,17 +71,10 @@ struct ntp8918_priv {
 	bool fw_loaded;
 
 	struct snd_soc_component *component;
-	struct gpio_desc *hp_det;
-	struct delayed_work hp_work;
-	bool hp_seen;
-	bool hp_inserted;
+	struct amp_hp_det hp;
 	bool stream_muted;
 	struct mutex mute_lock;
 };
-
-#define NTP8918_HP_DEBOUNCE_MS	40
-#define NTP8918_HP_POLL_MS	300
-#define NTP8918_HP_BACKSTOP_MS	2000
 
 static const DECLARE_TLV_DB_SCALE(ntp8918_master_vol_scale, -12550, 50, 0);
 
@@ -219,7 +208,7 @@ static int ntp8918_snd_resume(struct snd_soc_component *component)
 static int ntp8918_apply_mute(struct ntp8918_priv *ntp8918)
 {
 	unsigned int mask = NTP8918_SOFT_MUTE_SM1 | NTP8918_SOFT_MUTE_SM2;
-	bool mute = ntp8918->stream_muted || ntp8918->hp_inserted;
+	bool mute = ntp8918->stream_muted || amp_hp_det_inserted(&ntp8918->hp);
 
 	if (!ntp8918->component)
 		return 0;
@@ -251,64 +240,9 @@ static int ntp8918_put_master_vol(struct snd_kcontrol *kcontrol,
 	return ret;
 }
 
-/*
- * The pad interrupt cannot be asked for both edges: on this generation the
- * controller has no such mode and set_type answers -EINVAL, which is why the
- * vendor driver watches the falling one alone. So the trigger is turned around
- * after every change to face the transition that can still happen, and a slow
- * poll runs underneath to heal the one that slips through while the trigger is
- * being turned.
- *
- * confirm asks for the same reading twice, which is what the poll uses to sit
- * out the contact settling; the interrupt path has already waited instead.
- */
-static void ntp8918_hp_update(struct ntp8918_priv *ntp8918, bool confirm)
+static void ntp8918_hp_changed(void *data)
 {
-	bool now = gpiod_get_value_cansleep(ntp8918->hp_det) > 0;
-
-	mutex_lock(&ntp8918->mute_lock);
-	if ((!confirm || now == ntp8918->hp_seen) &&
-	    now != ntp8918->hp_inserted) {
-		ntp8918->hp_inserted = now;
-		dev_dbg(&ntp8918->i2c->dev, "headphone jack %s\n",
-			now ? "inserted, speaker muted" : "removed");
-		ntp8918_apply_mute(ntp8918);
-	}
-	ntp8918->hp_seen = now;
-	mutex_unlock(&ntp8918->mute_lock);
-
-	if (ntp8918->i2c->irq > 0)
-		irq_set_irq_type(ntp8918->i2c->irq,
-				 now ? IRQ_TYPE_EDGE_RISING :
-				       IRQ_TYPE_EDGE_FALLING);
-}
-
-static void ntp8918_hp_stop(void *data)
-{
-	struct ntp8918_priv *ntp8918 = data;
-
-	cancel_delayed_work_sync(&ntp8918->hp_work);
-}
-
-static irqreturn_t ntp8918_hp_irq(int irq, void *data)
-{
-	struct ntp8918_priv *ntp8918 = data;
-
-	msleep(NTP8918_HP_DEBOUNCE_MS);
-	ntp8918_hp_update(ntp8918, false);
-
-	return IRQ_HANDLED;
-}
-
-static void ntp8918_hp_poll(struct work_struct *work)
-{
-	struct ntp8918_priv *ntp8918 = container_of(work, struct ntp8918_priv,
-						    hp_work.work);
-	unsigned int period = ntp8918->i2c->irq > 0 ? NTP8918_HP_BACKSTOP_MS
-						    : NTP8918_HP_POLL_MS;
-
-	ntp8918_hp_update(ntp8918, true);
-	schedule_delayed_work(&ntp8918->hp_work, msecs_to_jiffies(period));
+	ntp8918_apply_mute(data);
 }
 
 static int ntp8918_probe(struct snd_soc_component *component)
@@ -330,11 +264,7 @@ static int ntp8918_probe(struct snd_soc_component *component)
 	 */
 	mutex_lock(&ntp8918->mute_lock);
 	ntp8918->component = component;
-	if (ntp8918->hp_det) {
-		ntp8918->hp_inserted =
-			gpiod_get_value_cansleep(ntp8918->hp_det) > 0;
-		ntp8918->hp_seen = ntp8918->hp_inserted;
-	}
+	amp_hp_det_resync(&ntp8918->hp);
 	mutex_unlock(&ntp8918->mute_lock);
 
 	/*
@@ -637,45 +567,11 @@ static int ntp8918_i2c_probe(struct i2c_client *i2c)
 	if (ret)
 		return ret;
 
-	ntp8918->hp_det = devm_gpiod_get_optional(&i2c->dev, "hp-det", GPIOD_IN);
-	if (IS_ERR(ntp8918->hp_det))
-		return dev_err_probe(&i2c->dev, PTR_ERR(ntp8918->hp_det),
-				     "Failed to get jack detect gpio\n");
-
-	if (ntp8918->hp_det) {
-		ntp8918->hp_inserted =
-			gpiod_get_value_cansleep(ntp8918->hp_det) > 0;
-		ntp8918->hp_seen = ntp8918->hp_inserted;
-
-		INIT_DELAYED_WORK(&ntp8918->hp_work, ntp8918_hp_poll);
-		ret = devm_add_action_or_reset(&i2c->dev, ntp8918_hp_stop,
-					       ntp8918);
-		if (ret)
-			return ret;
-
-		if (i2c->irq > 0) {
-			ret = devm_request_threaded_irq(&i2c->dev, i2c->irq,
-					NULL, ntp8918_hp_irq, IRQF_ONESHOT,
-					"ntp8918-hp-det", ntp8918);
-			if (ret)
-				return dev_err_probe(&i2c->dev, ret,
-						"Failed to claim jack detect\n");
-
-			/*
-			 * The tree can only name the edge for an empty socket,
-			 * so aim it at whichever transition is still ahead.
-			 */
-			irq_set_irq_type(i2c->irq, ntp8918->hp_inserted ?
-					 IRQ_TYPE_EDGE_RISING :
-					 IRQ_TYPE_EDGE_FALLING);
-		} else {
-			dev_info(&i2c->dev,
-				 "no jack interrupt, polling the line\n");
-		}
-
-		schedule_delayed_work(&ntp8918->hp_work,
-				      msecs_to_jiffies(NTP8918_HP_POLL_MS));
-	}
+	ret = devm_amp_hp_det_init(&i2c->dev, &ntp8918->hp, i2c->irq,
+				   &ntp8918->mute_lock, ntp8918_hp_changed,
+				   ntp8918);
+	if (ret)
+		return ret;
 
 	ntp8918->reset = devm_reset_control_get_shared(&i2c->dev, NULL);
 	if (IS_ERR(ntp8918->reset))

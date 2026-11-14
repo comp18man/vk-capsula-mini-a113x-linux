@@ -90,4 +90,17 @@ config EC_LENOVO_THINKPAD_T14S
 
 	  Say M or Y here to include this support.
 
+config VK_CAPSULA_MINI_PROBER
+	tristate "VK Capsula Mini second-source part prober"
+	depends on ARCH_MESON || COMPILE_TEST
+	depends on I2C
+	depends on OF
+	select OF_DYNAMIC
+	help
+	  The VK Capsula Mini is built with one of two speaker amplifiers on
+	  the same footprint. Both are in its device tree; this enables the
+	  one that is fitted and points the sound card at it.
+
+	  Say Y here if the kernel is to run on that board.
+
 endif # ARM64_PLATFORM_DEVICES
