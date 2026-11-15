@@ -184,13 +184,18 @@ static int capsula_pick_panel(struct device *dev)
 	int ret;
 
 	ret = i2c_of_probe_component(dev, &capsula_panel, NULL);
-	if (ret != -ENODEV)
+	if (ret)
 		return ret;
+
+	struct device_node *aw __free(device_node) =
+		of_find_compatible_node(NULL, NULL, "awinic,aw21036");
+	if (aw && of_device_is_available(aw))
+		return 0;
 
 	struct device_node *np __free(device_node) =
 		of_find_compatible_node(NULL, NULL, "issi,is31fl3236a");
 	if (!np)
-		return ret;
+		return -ENODEV;
 
 	return capsula_enable(np);
 }
