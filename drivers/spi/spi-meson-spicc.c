@@ -720,6 +720,7 @@ static int meson_spicc_unprepare_transfer(struct spi_controller *host)
 {
 	struct meson_spicc_device *spicc = spi_controller_get_devdata(host);
 	u32 conf = readl_relaxed(spicc->base + SPICC_CONREG) & SPICC_DATARATE_MASK;
+	u32 enh = readl_relaxed(spicc->base + SPICC_ENH_CTL0);
 
 	/* Disable all IRQs */
 	writel(0, spicc->base + SPICC_INTREG);
@@ -728,6 +729,17 @@ static int meson_spicc_unprepare_transfer(struct spi_controller *host)
 
 	/* Set default configuration, keeping datarate field */
 	writel_relaxed(conf, spicc->base + SPICC_CONREG);
+
+	/*
+	 * The reset above clears ENH_CTL0, which holds both the enhanced clock
+	 * divider (bits 16..23) and the clock mux (bit 24). The clk framework
+	 * keeps the rate cached, so clk_set_rate() of the next transfer sees no
+	 * change and never writes the register again: without this the second
+	 * and every following transfer runs at the wrong rate, and the WS2812
+	 * ring on this board decodes the frame as garbage. Restore the register.
+	 */
+	if (spicc->data->has_enhance_clk_div)
+		writel_relaxed(enh, spicc->base + SPICC_ENH_CTL0);
 
 	if (!spicc->data->has_oen)
 		pinctrl_select_default_state(&spicc->pdev->dev);
@@ -939,7 +951,13 @@ static int meson_spicc_enh_clk_init(struct meson_spicc_device *spicc)
 	snprintf(name, sizeof(name), "%s#enh_div", dev_name(dev));
 	init.name = name;
 	init.ops = &clk_divider_ops;
-	init.flags = CLK_SET_RATE_PARENT;
+	/*
+	 * CLK_GET_RATE_NOCACHE: the divider register is cleared by the device
+	 * reset in meson_spicc_unprepare_transfer(), so a cached rate would hide
+	 * the mismatch and keep clk_set_rate() from reprogramming it. pow2_div
+	 * already carries this flag for the same reason.
+	 */
+	init.flags = CLK_SET_RATE_PARENT | CLK_GET_RATE_NOCACHE;
 	parent_data[0].hw = &enh_fixed_div->hw;
 	init.num_parents = 1;
 
