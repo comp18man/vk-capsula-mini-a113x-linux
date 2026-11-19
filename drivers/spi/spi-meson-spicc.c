@@ -199,6 +199,7 @@ struct meson_spicc_device {
 	dma_addr_t			tx_dma;
 	dma_addr_t			rx_dma;
 	bool				using_dma;
+	u32				enh_ctl0;
 };
 
 #define pow2_clk_to_spicc(_div) container_of(_div, struct meson_spicc_device, pow2_div)
@@ -706,6 +707,9 @@ static int meson_spicc_prepare_message(struct spi_controller *host,
 
 	writel_relaxed(conf, spicc->base + SPICC_CONREG);
 
+	if (spicc->data->has_enhance_clk_div)
+		writel_relaxed(spicc->enh_ctl0, spicc->base + SPICC_ENH_CTL0);
+
 	/* Setup no wait cycles by default */
 	writel_relaxed(0, spicc->base + SPICC_PERIODREG);
 
@@ -720,6 +724,9 @@ static int meson_spicc_unprepare_transfer(struct spi_controller *host)
 {
 	struct meson_spicc_device *spicc = spi_controller_get_devdata(host);
 	u32 conf = readl_relaxed(spicc->base + SPICC_CONREG) & SPICC_DATARATE_MASK;
+
+	if (spicc->data->has_enhance_clk_div)
+		spicc->enh_ctl0 = readl_relaxed(spicc->base + SPICC_ENH_CTL0);
 
 	/* Disable all IRQs */
 	writel(0, spicc->base + SPICC_INTREG);
@@ -1080,6 +1087,8 @@ static int meson_spicc_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev, "clock registration failed\n");
 			goto out_host;
 		}
+
+		spicc->enh_ctl0 = readl_relaxed(spicc->base + SPICC_ENH_CTL0);
 	}
 
 	ret = spi_register_controller(host);
