@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# Bluetooth pairing window.
+# Outside it the speaker does not show up in phone
+# scans and turns down new pairings (phones paired before connect anyway).
+# It closes on its own after DiscoverableTimeout and PairableTimeout from
+# /etc/bluetooth/main.conf.
+#
+# The phone picks the codec when it connects, and Android tends to take SBC
+# even when both sides have AAC (aac and sbc switch the phones connected now).
+#
+#   bt-pair        open
+#   bt-pair off    close now
+#   bt-pair aac    switch connected phones to AAC
+#   bt-pair sbc    and back to SBC
+#
+
+bt() {
+	timeout 5 bluetoothctl "$@" >/dev/null
+}
+
+codec() {
+	pcms=$(bluealsa-cli list-pcms | grep /a2dpsnk/)
+	[ -n "$pcms" ] || { echo "no phone connected" >&2; exit 1; }
+
+	for pcm in $pcms; do
+		mac=$(echo "$pcm" | sed 's|.*/dev_\([^/]*\)/.*|\1|; s|_|:|g')
+		name=$(timeout 5 bluetoothctl info "$mac" |
+			sed -n 's/^[[:space:]]*Name: //p')
+		if bluealsa-cli info "$pcm" | grep '^Available codecs:' |
+		   grep -q -w "$1"; then
+			bluealsa-cli codec "$pcm" "$1"
+		else
+			echo "${name:-$mac}: does not offer $1" >&2
+		fi
+		echo "${name:-$mac}: $(bluealsa-cli info "$pcm" |
+			sed -n 's/^Selected codec: //p')"
+	done
+}
+
+case "${1:-}" in
+"")
+	bt pairable on && bt discoverable on
+	;;
+off)
+	bt discoverable off
+	bt pairable off
+	;;
+aac|sbc)
+	codec "$(echo "$1" | tr a-z A-Z)"
+	exit
+	;;
+*)
+	echo "usage: bt-pair [off|aac|sbc]" >&2
+	exit 1
+	;;
+esac
+
+timeout 5 bluetoothctl show | grep -E 'Discoverable:|Pairable:'

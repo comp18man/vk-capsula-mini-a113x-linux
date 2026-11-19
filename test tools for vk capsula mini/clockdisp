@@ -1,0 +1,422 @@
+#!/bin/sh
+#
+# Front panel - VK Mini
+#
+# Four 7-segment digits go through the kernel: seg-led-class registers them
+# with the character line display class, so text is just a write to
+# message. The colon is not part of a character cell, so it stays two
+# plain LED class devices - which is why it can also carry triggers.
+#
+# Arbitrary segment patterns (emoji) work through "map_seg7": that file
+# is the whole 128-byte ASCII-to-segment table. --raw patches four unused
+# control codes in it to the requested masks and then prints those codes,
+# so the printable characters keep their normal shapes.
+#
+#   clockdisp 12:34        show a time, colon lit
+#   clockdisp 1234         same, colon dark
+#   clockdisp ' 7:05'      a space blanks that digit
+#   clockdisp --test       show L0:L]
+#   clockdisp --walk       light each segment in turn, naming it
+#   clockdisp --off        blank everything
+#
+#   clockdisp --raw 39,63,63,0f          masks as hex, one per digit
+#   clockdisp --raw adef,abfg,abfg,abcd  or as segment letters
+#   clockdisp --raw 39,,,0f              an empty field blanks that digit
+#
+#   clockdisp --colon on|off|blink       blink is a kernel LED trigger,
+#                                        no userspace loop involved
+#   clockdisp --scroll 250               scroll step in ms, 0 disables
+#   clockdisp --brightness 200           PWM duty, 0 to 255
+#   clockdisp --current 2                analogue current, 1 to 4 as a
+#                                        divider: 1 is the brightest and
+#                                        4 the dimmest. At full brightness
+#                                        nothing switches, so this is the
+#                                        knob to use when quiet matters.
+#
+#   Both stick until changed and may precede any other command.
+#
+# Faces: two eyes on the middle pair of digits, nose on the lower colon
+# dot, outer digits dark.
+#
+#   clockdisp --faces                    list every face and animation
+#   clockdisp --face surprised
+#   clockdisp --anim blink               play once
+#   clockdisp --anim sleep 3             play three times
+#   clockdisp --anim wink loop           until interrupted
+#
+#   FRAME_MS=0.25 clockdisp --anim wow   frame time, default 0.5 s
+#
+# Segment letters are the usual 7-segment ones, matching the bit order of
+# map_to_7segment.h: a=0x01 b=0x02 c=0x04 d=0x08 e=0x10 f=0x20 g=0x40
+#
+#       --- a ---
+#      |         |
+#      f         b
+#      |         |
+#       --- g ---
+#      |         |
+#      e         c
+#      |         |
+#       --- d ---
+
+set -u
+
+LEDDIR=/sys/class/leds
+BRIGHT=${BRIGHT:-}
+COLON_TOP="$LEDDIR/clock:colon:top"
+COLON_BOTTOM="$LEDDIR/clock:colon:bottom"
+
+RAW_BASE=1
+
+die() { echo "clockdisp: $*" >&2; exit 1; }
+
+disp=
+for d in /sys/class/linedisp/linedisp.* \
+	 /sys/bus/platform/devices/*/linedisp.* \
+	 /sys/devices/platform/*/linedisp.*; do
+	if [ -f "$d/message" ]; then
+		disp=$d
+		break
+	fi
+done
+[ -n "$disp" ] ||
+	die "no line display found. Check that /sys/bus/platform/devices/display-*
+     exists and that CONFIG_SEG_LED_CLASS is built in."
+
+MESSAGE="$disp/message"
+MAP="$disp/map_seg7"
+
+BRIGHTFILE=
+for b in "$disp/../brightness" "$disp/device/brightness"; do
+	[ -f "$b" ] && { BRIGHTFILE=$b; break; }
+done
+
+CURFILE=
+for c in /sys/bus/i2c/devices/*/current_divider; do
+	[ -f "$c" ] && { CURFILE=$c; break; }
+done
+
+if [ -z "$BRIGHT" ]; then
+	BRIGHT=$(cat "$BRIGHTFILE" 2>/dev/null || echo 255)
+fi
+
+set_colon() {
+	printf '%s' "$1" > "$COLON_TOP/brightness" 2>/dev/null
+	printf '%s' "$1" > "$COLON_BOTTOM/brightness" 2>/dev/null
+}
+
+
+has_triggers() { [ -w "$COLON_TOP/trigger" ]; }
+
+colon_trigger() {
+	has_triggers || return 0
+	for l in "$COLON_TOP" "$COLON_BOTTOM"; do
+		printf '%s' "$1" > "$l/trigger"
+	done
+}
+
+colon_off() { colon_trigger none; set_colon 0; }
+colon_on()  { colon_trigger none; set_colon "$BRIGHT"; }
+
+colon_blink() {
+	has_triggers ||
+		die "no LED triggers in this kernel; rebuild with CONFIG_LEDS_TRIGGERS
+     and CONFIG_LEDS_TRIGGER_TIMER, then 'make marusia_mini_defconfig'"
+
+	colon_trigger timer
+	for l in "$COLON_TOP" "$COLON_BOTTOM"; do
+		printf '%s' "${BLINK_ON:-500}" > "$l/delay_on"
+		printf '%s' "${BLINK_OFF:-500}" > "$l/delay_off"
+	done
+}
+
+# Segment letters or hex -> numeric mask.
+parse_mask() {
+	_in=$1
+
+	case "$_in" in
+	"")
+		echo 0
+		return
+		;;
+	*[!a-gA-G]*)
+		printf '%d' "0x$_in" 2>/dev/null || die "cannot parse mask '$_in'"
+		return
+		;;
+	esac
+
+	_m=0
+	while [ -n "$_in" ]; do
+		_c=${_in%"${_in#?}"}		# first character
+		_in=${_in#?}
+		case $_c in
+		a|A) _m=$((_m | 0x01)) ;;
+		b|B) _m=$((_m | 0x02)) ;;
+		c|C) _m=$((_m | 0x04)) ;;
+		d|D) _m=$((_m | 0x08)) ;;
+		e|E) _m=$((_m | 0x10)) ;;
+		f|F) _m=$((_m | 0x20)) ;;
+		g|G) _m=$((_m | 0x40)) ;;
+		esac
+	done
+	echo $_m
+}
+
+# Byte at offset $2 of file $1 becomes $3.
+poke_byte() {
+	printf "$(printf '\\%03o' "$3")" |
+		dd of="$1" bs=1 seek="$2" conv=notrunc 2>/dev/null
+}
+
+show_text() {
+	printf '%s' "$1" > "$MESSAGE" || die "write to $MESSAGE failed"
+}
+
+
+nose() {
+	colon_trigger none
+	case "$1" in
+	on)  printf '0' > "$COLON_TOP/brightness"
+	     printf '%s' "$BRIGHT" > "$COLON_BOTTOM/brightness" ;;
+	off) printf '0' > "$COLON_TOP/brightness"
+	     printf '0' > "$COLON_BOTTOM/brightness" ;;
+	esac
+}
+
+# Put four arbitrary segment masks on the four digits.
+#
+# The four scratch codes get patched into map_seg7 and then printed. The
+# whole table has to go back in a single 128-byte write, so it is read,
+# patched in place, and written back.
+show_masks() {
+	[ -w "$MAP" ] || die "$MAP is not writable"
+
+	_tmp=$(mktemp) || die "mktemp failed"
+
+	dd if="$MAP" of="$_tmp" bs=128 count=1 2>/dev/null ||
+		{ rm -f "$_tmp"; die "cannot read $MAP"; }
+	[ "$(wc -c < "$_tmp")" = 128 ] ||
+		{ rm -f "$_tmp"; die "unexpected map size"; }
+
+	_i=0
+	_chars=
+	for _mask in "$1" "$2" "$3" "$4"; do
+		poke_byte "$_tmp" $((RAW_BASE + _i)) "$_mask"
+		_chars="$_chars$(printf "\\$(printf '%03o' $((RAW_BASE + _i)))")"
+		_i=$((_i + 1))
+	done
+
+	dd if="$_tmp" of="$MAP" bs=128 count=1 2>/dev/null ||
+		{ rm -f "$_tmp"; die "cannot write $MAP (needs exactly 128 bytes)"; }
+	rm -f "$_tmp"
+
+	printf '%s' "$_chars" > "$MESSAGE" || die "write to $MESSAGE failed"
+}
+
+# Faces.
+EYE_ARCH=0x23		# a b f - open eye, the resting shape
+EYE_LINE=0x40		# g     - squint
+EYE_LOW=0x08		# d     - droopy, half asleep
+EYE_HIGH=0x01		# a     - raised brow
+EYE_WIDE=0x3f		# 0     - wide open
+EYE_ROUND=0x5c		# o     - small and round
+EYE_ANGRY_L=0x21	# a f   - brow sloping down towards the nose
+EYE_ANGRY_R=0x03	# a b   - mirrored
+
+face_eyes() {
+	case "$1" in
+	idle)             echo "$EYE_ARCH $EYE_ARCH" ;;
+	neutral)          echo "$EYE_LINE $EYE_LINE" ;;
+	surprised)        echo "$EYE_WIDE $EYE_WIDE" ;;
+	curious)          echo "$EYE_ROUND $EYE_ROUND" ;;
+	sleepy)           echo "$EYE_LOW $EYE_LOW" ;;
+	shock)            echo "$EYE_HIGH $EYE_HIGH" ;;
+	wink)             echo "$EYE_ARCH $EYE_LINE" ;;
+	wink-round-left)  echo "$EYE_ROUND $EYE_LINE" ;;
+	wink-round-right) echo "$EYE_LINE $EYE_ROUND" ;;
+	wink-wide-left)   echo "$EYE_WIDE $EYE_LINE" ;;
+	wink-wide-right)  echo "$EYE_LINE $EYE_WIDE" ;;
+	angry)            echo "$EYE_ANGRY_L $EYE_ANGRY_R" ;;
+	*)                return 1 ;;
+	esac
+}
+
+FACE_NAMES="idle neutral surprised curious sleepy shock wink
+wink-round-left wink-round-right wink-wide-left wink-wide-right angry"
+
+show_face() {
+	_eyes=$(face_eyes "$1") ||
+		die "unknown face '$1'; try --faces"
+	show_masks 0 "${_eyes%% *}" "${_eyes##* }" 0
+	nose on
+}
+
+# Animations
+anim_frames() {
+	case "$1" in
+	blink) echo "idle neutral idle" ;;
+	sleep) echo "idle neutral sleepy" ;;
+	wow)   echo "neutral curious surprised" ;;
+	angry) echo "neutral angry" ;;
+	wink)  echo "idle wink idle" ;;
+	*)     return 1 ;;
+	esac
+}
+
+ANIM_NAMES="blink sleep wow angry wink"
+
+while :; do
+	case "${1:-}" in
+	--brightness=*) _opt=brightness; _val=${1#*=}; shift ;;
+	--current=*)    _opt=current;    _val=${1#*=}; shift ;;
+	--brightness|--current)
+			_opt=${1#--}; _val=${2:-}
+			[ -n "$_val" ] || die "$1 needs a value"
+			shift 2 ;;
+	*)		break ;;
+	esac
+
+	case $_val in
+	''|*[!0-9]*) die "--$_opt takes a number" ;;
+	esac
+
+	if [ "$_opt" = brightness ]; then
+		[ "$_val" -le 255 ] || die "--brightness takes 0 to 255"
+		[ -n "$BRIGHTFILE" ] ||
+			die "this kernel has no display brightness file"
+		printf '%s' "$_val" > "$BRIGHTFILE" ||
+			die "cannot write $BRIGHTFILE"
+		BRIGHT=$_val
+	else
+		[ "$_val" -ge 1 ] && [ "$_val" -le 4 ] ||
+			die "--current takes 1 to 4"
+		[ -n "$CURFILE" ] ||
+			die "this kernel has no current divider file"
+		printf '%s' "$_val" > "$CURFILE" ||
+			die "cannot write $CURFILE"
+	fi
+done
+
+case "${1:---help}" in
+--help|-h)
+	awk 'NR > 1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"
+	exit 0
+	;;
+
+--off)
+	show_text '    '
+	colon_off
+	exit 0
+	;;
+
+--test)
+	show_text 'L0L]'
+	colon_on
+	echo "showing L0:L]"
+	exit 0
+	;;
+
+--walk)
+	cat <<'EOF'
+      --- a ---
+     |         |
+     f         b
+     |         |
+      --- g ---
+     |         |
+     e         c
+     |         |
+      --- d ---
+
+EOF
+	show_text '    '
+	colon_off
+	for dg in d1 d2 d3 d4; do
+		for sg in a b c d e f g; do
+			printf 'digit %s segment %s\n' "$dg" "$sg"
+			printf '%s' "$BRIGHT" > "$LEDDIR/clock:$dg:$sg/brightness" 2>/dev/null ||
+				die "no $LEDDIR/clock:$dg:$sg"
+			sleep "${WALK_DELAY:-1}"
+			printf '0' > "$LEDDIR/clock:$dg:$sg/brightness"
+		done
+	done
+	echo colon
+	colon_on; sleep "${WALK_DELAY:-1}"; colon_off
+	exit 0
+	;;
+
+--colon)
+	case "${2:-}" in
+	on)    colon_on ;;
+	off)   colon_off ;;
+	blink) colon_blink ;;
+	*)     die "--colon needs on, off or blink" ;;
+	esac
+	exit 0
+	;;
+
+--scroll)
+	[ $# -ge 2 ] || die "--scroll needs a value in ms"
+	printf '%s' "$2" > "$disp/scroll_step_ms" || die "cannot set scroll rate"
+	exit 0
+	;;
+
+--raw)
+	[ $# -ge 2 ] || die "--raw needs comma separated masks"
+
+	rest=$2
+	i=0
+	set --
+	while [ $i -lt 4 ]; do
+		case "$rest" in
+		*,*) field=${rest%%,*}; rest=${rest#*,} ;;
+		*)   field=$rest;       rest= ;;
+		esac
+		set -- "$@" "$(parse_mask "$field")"
+		i=$((i + 1))
+	done
+
+	show_masks "$1" "$2" "$3" "$4"
+	exit 0
+	;;
+
+--faces)
+	echo "faces:"
+	for f in $FACE_NAMES; do echo "  $f"; done
+	echo "animations:"
+	for a in $ANIM_NAMES; do echo "  $a"; done
+	exit 0
+	;;
+
+--face)
+	[ $# -ge 2 ] || die "--face needs a name; try --faces"
+	show_face "$2"
+	exit 0
+	;;
+
+--anim)
+	[ $# -ge 2 ] || die "--anim needs a name; try --faces"
+	frames=$(anim_frames "$2") || die "unknown animation '$2'; try --faces"
+
+	repeat=${3:-1}
+	n=0
+	while [ "$repeat" = loop ] || [ "$n" -lt "$repeat" ]; do
+		for f in $frames; do
+			show_face "$f"
+			sleep "${FRAME_MS:-0.5}"
+		done
+		n=$((n + 1))
+	done
+	exit 0
+	;;
+esac
+
+text=$1
+case "$text" in
+*:*) want_colon=1; text=$(printf '%s' "$text" | tr -d ':') ;;
+*)   want_colon=0 ;;
+esac
+
+# Right aligned
+show_text "$(printf '%4.4s' "$text")"
+[ "$want_colon" = 1 ] && colon_on || colon_off

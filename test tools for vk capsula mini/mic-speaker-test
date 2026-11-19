@@ -1,0 +1,267 @@
+#!/bin/bash
+set -u
+
+export DIALOGOPTS="--cr-wrap --no-collapse"
+
+CARD=0
+CAP_RAW=hw:0,1
+BOOST_PCM=micboost
+BOOST_CTL="Mic Boost"
+CAP_FMT=S32_LE
+CAP_CH=4
+CAP_RATE=48000
+CAP_MUX="TODDR_A SRC SEL"
+CAP_IN="IN 4"
+PLAY_DEV=plughw:0,0
+VOL="Playback"
+MASTER="Master"
+FULLSCALE=2147483647
+LENGTH=5
+TONE=2
+TONE_HZ=1000
+WINDOW=65536
+SLICES=8
+
+WAV=""
+PEAK="not measured"
+CAP_DEV="$CAP_RAW"
+GAIN_DB=0
+GAIN_TXT="unknown"
+
+cleanup() {
+	[ -z "$WAV" ] || rm -f "$WAV"
+	clear 2>/dev/null
+}
+
+die() {
+	dialog --title "Failed" --msgbox "$1" "${2:-10}" 66
+	exit 1
+}
+
+volume() {
+	local amp digital
+
+	amp=$(amixer -c "$CARD" sget "$VOL" 2>/dev/null |
+		sed -n 's/.*Mono: \([0-9]*\) \[\([0-9]*\)%\].*/\2% (\1)/p' | head -1)
+	digital=$(amixer -c "$CARD" sget "$MASTER" 2>/dev/null |
+		sed -n 's/.*Front Left: Playback [0-9]* \[\([0-9]*\)%\].*/\1%/p' | head -1)
+	[ -z "$digital" ] || amp="$amp, $digital digital"
+
+	printf '%s' "$amp"
+}
+
+to_dbfs() {
+	awk -v fs="$FULLSCALE" '
+	{ for (i = 1; i <= NF; i++) { v = $i < 0 ? -$i : $i; if (v > m) m = v } }
+	END {
+		if (m > 0) printf "%.1f dBFS", 20 * log(m / fs) / log(10)
+		else printf "silent"
+	}'
+}
+
+settled() { echo $((CAP_RATE * CAP_CH * 4 / 2 / WINDOW + 1)); }
+
+peak_tail() {
+	local size
+	size=$(stat -Lc%s "$WAV" 2>/dev/null) || size=0
+	[ "$size" -gt $((WINDOW * 4)) ] || { printf 'settling'; return; }
+	tail -c "$WINDOW" "$WAV" 2>/dev/null | od -An -td4 -v 2>/dev/null | to_dbfs
+}
+
+peak_whole() {
+	local size first step i
+	size=$(stat -Lc%s "$WAV" 2>/dev/null) || size=0
+	first=$(settled)
+	[ $((size / WINDOW)) -gt $((first + SLICES)) ] || { peak_tail; return; }
+	step=$(((size / WINDOW - first) / SLICES))
+	[ "$step" -lt 1 ] && step=1
+	for ((i = 0; i < SLICES; i++)); do
+		dd if="$WAV" bs="$WINDOW" count=1 skip=$((first + i * step)) 2>/dev/null
+	done | od -An -td4 -v 2>/dev/null | to_dbfs
+}
+
+feed() { printf 'XXX\n%s\n%s\nXXX\n' "$1" "$2"; }
+
+pick_capture() {
+	local pct
+
+	arecord -D "$BOOST_PCM" --dump-hw-params -d 1 /dev/null 2>&1 |
+		grep -q '^HW Params' || die "No capture gain in this system.
+
+'$BOOST_PCM' is not a PCM here. The PDM block has no gain
+register the mixer can reach, so without softvol the level is
+whatever the microphones give and there is nothing to test.
+
+Put this in /etc/asound.conf:
+
+pcm.$BOOST_PCM {
+    type softvol
+    slave.pcm \"$CAP_RAW\"
+    control { name \"$BOOST_CTL\"; card $CARD }
+    min_dB -5.0
+    max_dB 40.0
+    resolution 121
+}" 21
+
+	CAP_DEV="$BOOST_PCM"
+	GAIN_DB=$(amixer -c "$CARD" sget "$BOOST_CTL" 2>/dev/null |
+		sed -n 's/.*\[\(-\?[0-9.]*\)dB\].*/\1/p' | head -1)
+	GAIN_DB=${GAIN_DB:-0}
+	pct=$(amixer -c "$CARD" sget "$BOOST_CTL" 2>/dev/null |
+		sed -n 's/.*\[\([0-9]*\)%\].*/\1/p' | head -1)
+	GAIN_TXT="$BOOST_CTL ${pct:-?}%, $GAIN_DB dB"
+}
+
+minus() { awk -v a="$1" -v b="$2" 'BEGIN { printf "%.1f", a - b }'; }
+
+meter() {
+	local pid=$1 secs=$2 title=$3 head=$4 mic_live=$5
+	local start now pct mic
+
+	start=$(date +%s%N)
+	{
+		while kill -0 "$pid" 2>/dev/null; do
+			now=$(date +%s%N)
+			pct=$(((now - start) / (secs * 10000000)))
+			[ "$pct" -gt 99 ] && pct=99
+			if [ "$mic_live" = 1 ]; then mic=$(peak_tail); else mic="$PEAK"; fi
+			feed "$pct" "$head
+
+mic       $mic
+gain      $GAIN_TXT
+speaker   $(volume)"
+			sleep 0.2
+		done
+		feed 100 "$head"
+	} | dialog --title "$title" --gauge "" 12 66 0
+
+	wait "$pid"
+}
+
+mic_test() {
+	local route level verdict raw
+
+	pick_capture
+
+	route=$(amixer -c "$CARD" sget "$CAP_MUX" 2>/dev/null |
+		sed -n "s/.*Item0: '\([^']*\)'.*/\1/p" | head -1)
+
+	[ "$route" = "$CAP_IN" ] || die "The microphones are not routed.
+
+'$CAP_MUX' is on '${route:-unknown}', so $CAP_RAW has no backend
+DAI and arecord will not open it. Set it once and save:
+
+  amixer -c $CARD sset '$CAP_MUX' '$CAP_IN'
+  rc-service alsa save" 13
+
+	WAV=$(mktemp /tmp/mic-speaker-test.XXXXXX.wav) || exit 1
+
+	dialog --title "Microphone and speaker" --msgbox "\
+Speak for $LENGTH seconds once this window closes, then listen:
+what the four microphones heard goes back out of the speaker.
+
+gain      $GAIN_TXT
+speaker   $(volume)
+
+The recording lives in /tmp and is deleted at the end." 14 66
+
+	arecord -D "$CAP_DEV" -f "$CAP_FMT" -c "$CAP_CH" -r "$CAP_RATE" \
+		-d "$LENGTH" "$WAV" >/dev/null 2>&1 &
+	meter $! "$LENGTH" "Recording, $LENGTH s" "Speak now." 1 ||
+		die "arecord failed on $CAP_DEV.
+
+arecord -D $CAP_DEV -f $CAP_FMT -c $CAP_CH -r $CAP_RATE -d $LENGTH out.wav"
+
+	PEAK=$(peak_whole)
+
+	aplay -D "$PLAY_DEV" "$WAV" >/dev/null 2>&1 &
+	meter $! "$LENGTH" "Playback" "Listen." 0 ||
+		die "aplay failed on $PLAY_DEV.
+
+aplay -D $PLAY_DEV $WAV"
+
+	case $PEAK in
+	silent)	raw="silent"
+		verdict="Nothing at all. The microphones are not delivering samples." ;;
+	*)	raw="$(minus "${PEAK% dBFS}" "$GAIN_DB") dBFS"
+		level=${raw%%.*}
+		if [ "$level" -ge -25 ]; then
+			verdict="Loud and clear."
+		elif [ "$level" -ge -45 ]; then
+			verdict="Quiet. This board reads about -50 dBFS in a silent
+room, so speech barely reached the microphones."
+		else
+			verdict="Room noise only. Nothing was picked up."
+		fi ;;
+	esac
+
+	dialog --title "Done" --msgbox "\
+mic peak    $PEAK
+at the mic  $raw, gain removed
+gain        $GAIN_TXT
+speaker     $(volume)
+
+capture     $CAP_DEV, $CAP_CH ch, $CAP_FMT, $CAP_RATE Hz
+playback    $PLAY_DEV
+
+$verdict
+
+$WAV removed." 17 66
+}
+
+one_channel() {
+	local n=$1 name=$2 rc
+
+	timeout "$TONE" speaker-test -D "$PLAY_DEV" -c 2 -s "$n" \
+		-t sine -f "$TONE_HZ" >/dev/null 2>&1 &
+	meter $! "$TONE" "$name channel" "$name only, $TONE s." 0
+	rc=$?
+
+	[ "$rc" = 0 ] || [ "$rc" = 124 ] || [ "$rc" = 143 ] ||
+		die "speaker-test failed on $PLAY_DEV.
+
+speaker-test -D $PLAY_DEV -c 2 -s $n -t sine -f $TONE_HZ"
+}
+
+speaker_test() {
+	dialog --title "Speaker" --msgbox "\
+A $TONE_HZ Hz sine, $TONE seconds into the left channel and then
+$TONE seconds into the right. Listen to what each one reaches.
+
+Both equally loud means the two amplifier outputs land on the
+same driver. Only one means the other output goes elsewhere,
+which is what the jack would be.
+
+speaker   $(volume)" 14 66
+
+	one_channel 1 Left
+	one_channel 2 Right
+
+	dialog --title "Done" --msgbox "\
+speaker     $(volume)
+playback    $PLAY_DEV
+tone        $TONE_HZ Hz sine, $TONE s per channel
+
+Silent on one side, or the internal driver going quiet with a
+plug in the jack, both say the two channels are wired apart." 13 66
+}
+
+for t in dialog arecord aplay amixer speaker-test od awk dd timeout; do
+	command -v "$t" >/dev/null ||
+		{ echo "${0##*/}: $t is missing" >&2; exit 1; }
+done
+
+amixer -c "$CARD" sget "$VOL" >/dev/null 2>&1 ||
+	{ echo "${0##*/}: no mixer control '$VOL' on card $CARD" >&2; exit 1; }
+
+trap cleanup EXIT INT TERM
+
+choice=$(dialog --title "Audio test" --default-item 1 --menu "" 11 66 2 \
+	1 "Microphone   record $LENGTH s, then play it back" \
+	2 "Speaker      $TONE_HZ Hz sine, $TONE s left then $TONE s right" \
+	3>&1 1>&2 2>&3) || exit 0
+
+case $choice in
+1)	mic_test ;;
+2)	speaker_test ;;
+esac

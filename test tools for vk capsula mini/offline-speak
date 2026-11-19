@@ -1,0 +1,18 @@
+#!/bin/ash
+
+PLAY=plughw:0,0
+
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $0 <language> <text...>" >&2
+    echo "Example: $0 en Hello world" >&2
+    echo "Example: $0 ru 'Проверка звука'" >&2
+    exit 2
+fi
+
+command -v espeak-ng >/dev/null || exit 0
+command -v aplay >/dev/null || exit 0
+
+LANG="$1"
+shift
+
+espeak-ng -v "${LANG}+m2" -s 110 --stdout "$*" | aplay -q -D "$PLAY"

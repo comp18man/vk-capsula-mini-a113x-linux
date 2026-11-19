@@ -1,0 +1,230 @@
+#!/bin/sh
+#
+# Ambient light sensor - VK Mini
+#
+#
+#   lightmon           refresh once a second until Ctrl-C
+#   lightmon -n 0.5    a different interval, in seconds
+#   lightmon -1        print one frame and exit, for logging or piping
+#   lightmon lux       print one value, bare
+#   lightmon -k        list the names the single-value form takes
+#
+# The part measures two things and nothing else: visible light plus
+# infrared on one photodiode, infrared alone on the other. Everything
+# below is derived from that pair.
+#
+#   visible, infrared  raw ADC counts, 0 to 65535. Approaching 65535
+#                      means saturation and the reading is no longer
+#                      meaningful -- lower the gain.
+#   illuminance        lux, computed by the driver: infrared weighted and
+#                      subtracted from visible, so the answer does not
+#                      depend on what is lighting the room.
+#   ratio              infrared / visible. This is what makes the
+#                      subtraction possible, and on its own it says what
+#                      kind of lamp is on.
+#   gain               x1, x2, x64, x128. Multiplies sensitivity; x64
+#                      takes the resolution from about 1.3 lux per count
+#                      to 0.02.
+#   integration        how long charge is collected, 102.6 ms by default.
+#                      Also affects sensitivity, and the driver folds it
+#                      into the lux figure, so lux stays right while the
+#                      raw counts move.
+#
+# Gain and integration time are writable:
+#
+#   echo 64 > /sys/bus/iio/devices/iio:device0/hardwaregain
+#
+# A note on source: the datasheet says the part is designed for
+# incandescent, fluorescent, halogen, white LED and sunlight, but gives
+# no ratio figures for them. The thresholds here are this taken
+# from where the datasheet switches lux coefficients - those brackets
+# exist precisely because the infrared content differs by source. Treat
+# the label as a hint and the ratio as the measurement.
+
+set -u
+
+INTERVAL=1
+ONCE=0
+KEY=
+
+CUR_HOME='\033[H'
+EOL='\033[K'
+EOS='\033[J'
+
+usage() {
+	awk '/^#!/ { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+}
+
+while [ $# -gt 0 ]; do
+	case $1 in
+	-n) INTERVAL=$2; shift 2 ;;
+	-1) ONCE=1; shift ;;
+	-k|--keys) KEY=__list; shift ;;
+	-h|--help) usage; exit 0 ;;
+	-*) echo "lightmon: unknown option '$1'" >&2; exit 1 ;;
+	*) KEY=$1; shift ;;
+	esac
+done
+
+if [ $ONCE -eq 1 ]; then
+	CUR_HOME=
+	EOL=
+	EOS=
+fi
+
+# ---------------------------------------------------------------- helpers
+
+r() {
+	[ -r "$1" ] && cat "$1" 2>/dev/null || echo "-"
+}
+
+find_iio() {
+	for d in /sys/bus/iio/devices/iio:device*; do
+		[ -r "$d/name" ] || continue
+		case $(cat "$d/name") in
+		bh1730) echo "$d"; return ;;
+		esac
+	done
+}
+
+IIO=$(find_iio)
+KEYS="lux visible infrared ratio source gain itime"
+
+num() {
+	case ${1:-} in
+	''|*[!0-9]*) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+# Ten cells on a log scale, two per factor of eight, because indoor light
+# spans four orders of magnitude and a linear bar would sit against one
+# end all day. 1 lux fills two cells, 10 four, 100 six, 1000 eight, full
+# daylight pins it.
+luxbar() {
+	whole=${1%%.*}
+	num "$whole" || whole=0
+
+	n=0
+	v=$whole
+	while [ "$v" -ge 1 ] && [ $n -lt 10 ]; do
+		v=$((v / 8))
+		n=$((n + 2))
+	done
+	[ $n -gt 10 ] && n=10
+
+	i=0
+	out=
+	while [ $i -lt 10 ]; do
+		if [ $i -lt $n ]; then out="$out#"; else out="$out."; fi
+		i=$((i + 1))
+	done
+	echo "$out"
+}
+
+ratio() {
+	c=$(r "$IIO/in_intensity_clear_raw")
+	f=$(r "$IIO/in_intensity_ir_raw")
+
+	num "$c" && num "$f" && [ "$c" -gt 0 ] || { echo "-"; return; }
+
+	awk -v c="$c" -v f="$f" 'BEGIN{ printf "%.3f\n", f / c }'
+}
+
+source_of() {
+	c=$(r "$IIO/in_intensity_clear_raw")
+	rt=$(ratio)
+
+	num "$c" || { echo "-"; return; }
+	[ "$c" -ge 16 ] || { echo "too dark to tell"; return; }
+	[ "$rt" = "-" ] && { echo "-"; return; }
+
+	awk -v r="$rt" 'BEGIN{
+		if (r < 0.26)      print "white LED or fluorescent";
+		else if (r < 0.55) print "daylight";
+		else if (r < 1.09) print "halogen";
+		else if (r < 2.13) print "incandescent";
+		else               print "infrared only";
+	}'
+}
+
+itime_ms() {
+	t=$(r "$IIO/integration_time")
+	case $t in
+	[0-9]*) awk -v s="$t" 'BEGIN{ printf "%.1f\n", s * 1000 }' ;;
+	*) echo "$t" ;;
+	esac
+}
+
+# ----------------------------------------------------------- single value
+
+get() {
+	case $1 in
+	lux)		r "$IIO/in_illuminance_input" ;;
+	visible)	r "$IIO/in_intensity_clear_raw" ;;
+	infrared)	r "$IIO/in_intensity_ir_raw" ;;
+	ratio)		ratio ;;
+	source)		source_of ;;
+	gain)		r "$IIO/hardwaregain" ;;
+	itime)		itime_ms ;;
+	__list)		echo "$KEYS" ;;
+	*)		echo "lightmon: no such value '$1'" >&2
+			echo "available: $KEYS" >&2
+			return 1 ;;
+	esac
+}
+
+if [ -n "$KEY" ]; then
+	get "$KEY"
+	exit $?
+fi
+
+# ----------------------------------------------------------------- screen
+
+if [ -z "$IIO" ]; then
+	echo "lightmon: no bh1730 in /sys/bus/iio/devices" >&2
+	exit 1
+fi
+
+draw() {
+	printf "$CUR_HOME"
+
+	lux=$(r "$IIO/in_illuminance_input")
+	vis=$(r "$IIO/in_intensity_clear_raw")
+	inf=$(r "$IIO/in_intensity_ir_raw")
+
+	printf '  light sensor  bh1730 at %s%b\n' "${IIO##*/}" "$EOL"
+	printf '%b\n' "$EOL"
+	printf '  %-13s %12s lux  [%s]%b\n' \
+		illuminance "$lux" "$(luxbar "$lux")" "$EOL"
+	printf '  %-13s %12s%b\n' visible "$vis" "$EOL"
+	printf '  %-13s %12s%b\n' infrared "$inf" "$EOL"
+	printf '  %-13s %12s%b\n' ratio "$(ratio)" "$EOL"
+	printf '  %-13s %12s%b\n' source "$(source_of)" "$EOL"
+	printf '%b\n' "$EOL"
+	printf '  %-13s %12sx%b\n' gain "$(r "$IIO/hardwaregain")" "$EOL"
+	printf '  %-13s %12s ms%b\n' integration "$(itime_ms)" "$EOL"
+	printf '%b\n' "$EOL"
+	[ $ONCE -eq 1 ] || printf '  Ctrl-C to quit%b\n' "$EOL"
+	printf '%b' "$EOS"
+}
+
+if [ $ONCE -eq 1 ]; then
+	draw
+	exit 0
+fi
+
+# Quitting has to survive the signal landing anywhere.
+QUIT=0
+trap 'QUIT=1' INT TERM
+trap 'printf "\033[?25h"' EXIT
+
+printf '\033[?25l\033[2J'
+
+while [ $QUIT -eq 0 ]; do
+	draw
+	[ $QUIT -eq 0 ] || break
+	sleep "$INTERVAL" || break
+done
+
+echo

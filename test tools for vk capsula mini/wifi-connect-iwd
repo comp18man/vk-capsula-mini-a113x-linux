@@ -1,0 +1,392 @@
+#!/bin/bash
+set -u
+
+export DIALOGOPTS="--cr-wrap --no-collapse"
+
+INTERFACES=/etc/network/interfaces
+IWD_CONF=/etc/iwd/main.conf
+IWD_STORE=/var/lib/iwd
+IWD_BIN=/usr/libexec/iwd
+IWCTL_T=5
+
+COUNTRY=RU
+SCAN_TIMEOUT=20
+CONNECT_TIMEOUT=30
+DHCP_TIMEOUT=30
+
+ESC=$(printf '\033')
+
+IFACE=""
+SSID=""
+SECRET=""
+SECURITY=""
+CONNECT_ERR=""
+PERSIST=0
+ADDR=""
+
+declare -a SSIDS=()
+declare -a SECS=()
+
+die() {
+	dialog --title "Failed" --msgbox "$1" "${2:-9}" 72
+	exit 1
+}
+
+decolour() { sed "s/${ESC}\[[0-9;]*m//g"; }
+
+iwc() { timeout "$IWCTL_T" iwctl "$@"; }
+
+list_ifaces() {
+	local d n type state
+	for d in /sys/class/net/*; do
+		n=${d##*/}
+		[ -e "$d/phy80211" ] || continue
+		type=$(iw dev "$n" info 2>/dev/null |
+			awk '$1 == "type" { $1 = ""; sub(/^ /, ""); print; exit }')
+		state=$(cat "$d/operstate" 2>/dev/null)
+		printf '%s\t%s\t%s\n' "$n" "${type:-unknown}" "${state:-unknown}"
+	done
+}
+
+pick_iface() {
+	local -a names=() menu=()
+	local n type state def=""
+
+	while IFS="$(printf '\t')" read -r n type state; do
+		names+=("$n")
+		menu+=("$n" "$type, $state")
+		case $n in wlan*) [ -n "$def" ] || def=$n ;; esac
+	done < <(list_ifaces)
+
+	[ ${#names[@]} -gt 0 ] || return 2
+
+	if [ ${#names[@]} = 1 ]; then
+		IFACE=${names[0]}
+		return 0
+	fi
+
+	[ -n "$def" ] || def=${names[0]}
+
+	IFACE=$(dialog --title "Interface" --default-item "$def" \
+		--menu "" 12 60 6 "${menu[@]}" 3>&1 1>&2 2>&3) || return 1
+	[ -n "$IFACE" ]
+}
+
+set_country() {
+	local tmp
+	awk '/^[[:space:]]*Country[[:space:]]*=/ { f = 1 } END { exit !f }' \
+		"$IWD_CONF" 2>/dev/null && return 0
+
+	tmp=$(mktemp) || return 1
+	if [ -f "$IWD_CONF" ] && grep -q '^\[General\]' "$IWD_CONF"; then
+		awk -v c="Country=$COUNTRY" '
+			{ print }
+			/^\[General\]/ && !done { print c; done = 1 }
+		' "$IWD_CONF" >"$tmp"
+	else
+		{ cat "$IWD_CONF" 2>/dev/null
+		  printf '\n[General]\nCountry=%s\n' "$COUNTRY"; } >"$tmp"
+	fi
+
+	mkdir -p "$(dirname "$IWD_CONF")"
+	cat "$tmp" >"$IWD_CONF"
+	rm -f "$tmp"
+	rc-service iwd restart >/dev/null 2>&1
+}
+
+start_services() {
+	rfkill unblock wifi >/dev/null 2>&1
+	rc-service dbus status >/dev/null 2>&1 || rc-service dbus start >/dev/null 2>&1
+	rc-service iwd status >/dev/null 2>&1 || rc-service iwd start >/dev/null 2>&1
+
+	local i
+	iwc station "$IFACE" show >/dev/null 2>&1 && return 0
+
+	dialog --infobox "Starting iwd" 5 40
+	for ((i = 0; i < 15; i++)); do
+		sleep 1
+		iwc station "$IFACE" show >/dev/null 2>&1 && return 0
+	done
+	return 1
+}
+
+iwd_kernel_gripe() {
+	[ -x "$IWD_BIN" ] || return 0
+	timeout 5 "$IWD_BIN" -d 2>&1 | awk '
+		/options are missing in the kernel/ { p = 1; next }
+		p && /^\t/ { gsub(/^[\t ]+|[\t ]+$/, ""); printf "%s ", $0; next }
+		p { exit }
+	'
+}
+
+list_networks() {
+	iwc station "$IFACE" get-networks rssi-dbms 2>/dev/null | decolour | awk '
+	/Available networks/ { next }
+	/Network name/       { next }
+	/^[[:space:]]*-+[[:space:]]*$/ { next }
+	{
+		sub(/^[[:space:]]*>?[[:space:]]*/, "")
+		if (NF < 3) next
+		sig = $NF
+		sec = $(NF - 1)
+		if (sig !~ /^-?[0-9]+$/) next
+		if (sig < -200) sig = sprintf("%.0f", sig / 100)
+		name = $1
+		for (i = 2; i <= NF - 2; i++) name = name " " $i
+		if (name == "") next
+		printf "%d\t%s\t%s\n", sig, sec, name
+	}'
+}
+
+do_scan() {
+	local i list=""
+
+	iwc station "$IFACE" scan >/dev/null 2>&1
+
+	for ((i = 0; i < SCAN_TIMEOUT; i++)); do
+		list=$(list_networks | sort -t"$(printf '\t')" -k1,1nr |
+			awk -F"$(printf '\t')" '!seen[$3]++')
+		[ -n "$list" ] && break
+		dialog --infobox "Scanning $IFACE" 5 40
+		sleep 1
+	done
+
+	[ -n "$list" ] || die "Nothing on the air.
+
+Hidden networks are not listed." 8
+
+	SSIDS=(); SECS=()
+	local -a menu=()
+	local n=0 sig sec ssid
+	while IFS="$(printf '\t')" read -r sig sec ssid; do
+		[ -n "$ssid" ] || continue
+		n=$((n + 1))
+		SSIDS[$n]=$ssid
+		SECS[$n]=$sec
+		menu+=("$n" "$ssid  ($sec, $sig dBm)")
+	done <<<"$list"
+
+	[ $n -gt 0 ] || die "No named networks found." 7
+
+	local choice
+	choice=$(dialog --title "Networks" \
+		--menu "" 15 72 10 "${menu[@]}" 3>&1 1>&2 2>&3) || return 1
+
+	SSID=${SSIDS[$choice]:-}
+	SECURITY=${SECS[$choice]:-}
+	[ -n "$SSID" ] || return 1
+}
+
+ask_passphrase() {
+	SECRET=$(dialog --insecure \
+		--passwordbox "Passphrase for \"$SSID\":" 8 68 3>&1 1>&2 2>&3)
+}
+
+ask_secret() {
+	SECRET=""
+
+	case $SECURITY in
+	open)
+		dialog --yesno "\"$SSID\" is open. Traffic goes out in the clear.
+
+Connect?" 8 68 || return 1
+		return 0
+		;;
+	8021x)
+		die "\"$SSID\" is an 802.1x network.
+
+It needs a username, a password or a certificate, which this
+script does not ask for. Write a profile into $IWD_STORE
+by hand and run: iwctl station $IFACE connect \"$SSID\"" 11
+		;;
+	esac
+
+	ask_passphrase
+}
+
+ask_persist() {
+	if dialog --yesno "Save \"$SSID\" and bring it up at boot?
+
+Yes: dbus and iwd into the boot runlevel, DHCP stanza into
+$INTERFACES.
+
+No: this session only. iwd stores the passphrase either way." 11 74; then
+		PERSIST=1
+	else
+		PERSIST=0
+	fi
+}
+
+stanza() {
+	printf 'auto %s\niface %s inet dhcp\n' "$IFACE" "$IFACE"
+}
+
+install_persistent() {
+	local old new
+
+	rc-update add dbus boot >/dev/null 2>&1
+	rc-update add iwd boot >/dev/null 2>&1
+
+	old=$(cat "$INTERFACES" 2>/dev/null)
+	new=$(printf '%s\n' "$old" | awk -v ifc="$IFACE" '
+		$1 == "auto"  && $2 == ifc { next }
+		$1 == "iface" && $2 == ifc { skip = 1; next }
+		skip && /^[ \t]/           { next }
+		                           { skip = 0; print }
+	')
+
+	has_usb0() { awk '$1 == "iface" && $2 == "usb0" { f = 1 } END { exit !f }'; }
+	if printf '%s\n' "$old" | has_usb0 && ! printf '%s\n' "$new" | has_usb0; then
+		die "Rewriting $INTERFACES would drop the usb0 stanza.
+
+Left alone. The network will connect, but no DHCP at boot." 9
+	fi
+
+	cp -f "$INTERFACES" "$INTERFACES.bak" 2>/dev/null
+	printf '%s\n\n%s\n' "$new" "$(stanza)" >"$INTERFACES" || return 1
+}
+
+connect_net() {
+	if [ -z "$SECRET" ]; then
+		CONNECT_ERR=$(iwc --dont-ask station "$IFACE" connect "$SSID" 2>&1)
+	else
+		CONNECT_ERR=$(iwc --dont-ask --passphrase "$SECRET" \
+			station "$IFACE" connect "$SSID" 2>&1)
+	fi
+}
+
+station_state() {
+	iwc station "$IFACE" show 2>/dev/null | decolour |
+		awk '$1 == "State" { print $2; exit }'
+}
+
+wait_connected() {
+	local i state=""
+	for ((i = 0; i < CONNECT_TIMEOUT; i++)); do
+		state=$(station_state)
+		[ "$state" = connected ] && return 0
+		[ "$state" = disconnected ] && [ $i -gt 3 ] && return 1
+		dialog --infobox "Connecting to \"$SSID\"
+
+${state:-no answer yet}" 6 68
+		sleep 1
+	done
+	return 1
+}
+
+start_dhcp() {
+	udhcpc -b -R -p "/var/run/udhcpc.$IFACE.pid" -i "$IFACE" >/dev/null 2>&1
+}
+
+wait_ip() {
+	local i
+	for ((i = 0; i < DHCP_TIMEOUT; i++)); do
+		ADDR=$(ip -4 addr show dev "$IFACE" 2>/dev/null |
+			awk '$1 == "inet" { print $2; exit }')
+		[ -n "$ADDR" ] && return 0
+		dialog --infobox "Waiting for DHCP on $IFACE" 5 40
+		sleep 1
+	done
+	return 1
+}
+
+report() {
+	local gw dns usb saved warn=""
+
+	gw=$(ip -4 route show default dev "$IFACE" 2>/dev/null |
+		awk '$1 == "default" && $2 == "via" { print $3; exit }')
+	dns=$(awk '$1 == "nameserver" { printf "%s ", $2 }' /etc/resolv.conf 2>/dev/null)
+	usb=$(ip -4 addr show dev usb0 2>/dev/null |
+		awk '$1 == "inet" { print $2; exit }')
+
+	if [ "$PERSIST" = 1 ]; then
+		saved="Saved, comes up at boot."
+	else
+		saved="Not enabled at boot. Profile still in $IWD_STORE,
+drop it with: iwctl known-networks \"$SSID\" forget"
+	fi
+
+	if rc-update show 2>/dev/null | grep -q '^ *wpa_supplicant'; then
+		warn="
+
+The wpa_supplicant service is enabled and will fight iwd for the
+radio. Pick one: rc-update del wpa_supplicant"
+	fi
+
+	dialog --title "Connected" --msgbox "\
+$SSID, $SECURITY
+
+interface   $IFACE
+address     $ADDR
+gateway     ${gw:-none}
+DNS         ${dns:-none}
+
+$saved
+usb0${usb:+ $usb} untouched.$warn" 20 74
+}
+
+[ "$(id -u)" = 0 ] || { echo "wifi-connect-iwd: needs root" >&2; exit 1; }
+for t in dialog iwctl rc-service rc-update timeout; do
+	command -v $t >/dev/null || { echo "wifi-connect-iwd: $t is missing" >&2; exit 1; }
+done
+
+trap 'clear 2>/dev/null' EXIT
+
+pick_iface
+case $? in
+2)	die "No wireless interface.
+
+The W1 driver is built in, so look for its messages rather than
+for a module: dmesg | grep -i aml" 9 ;;
+1)	exit 0 ;;
+esac
+
+set_country
+
+if ! start_services; then
+	# iwd probes its ciphers through AF_ALG and exits when they are absent,
+	# which from here looks the same as any other failure to start. Asking it
+	# gives the actual reason instead of a timeout.
+	missing=$(iwd_kernel_gripe)
+	[ -z "$missing" ] || missing="
+
+The kernel is missing what iwd needs:
+
+$missing"
+	die "iwd did not come up.
+
+rc-service iwd start
+rc-service dbus start$missing" 16
+fi
+
+do_scan || exit 0
+ask_secret || exit 0
+ask_persist
+
+[ "$PERSIST" = 1 ] && { install_persistent || die "Cannot write to /etc." 7; }
+
+while :; do
+	connect_net
+	wait_connected && break
+
+	[ "$SECURITY" = open ] && die "Could not join \"$SSID\".
+
+$CONNECT_ERR" 10
+
+	dialog --title "Failed" --yesno "Could not join \"$SSID\".
+
+${CONNECT_ERR:-no reason given}
+
+Try another passphrase?" 11 74 || exit 1
+
+	ask_passphrase || exit 1
+done
+
+start_dhcp
+
+wait_ip || die "No DHCP lease on $IFACE.
+
+Joined \"$SSID\", but no server answered.
+By hand: udhcpc -i $IFACE" 9
+
+report

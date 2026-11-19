@@ -1,0 +1,7 @@
+#!/bin/ash
+
+echo "The pressed touch keys on the speaker will be displayed below..."
+echo "Press Ctrl+C to exit"
+echo
+
+evtest /dev/input/event0
