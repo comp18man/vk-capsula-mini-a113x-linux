@@ -10,8 +10,12 @@
 - Датчик освещенности
 - USB Type-C
 
-
 ## Подробная статья о железе колонки:
 https://debianlive.ru/2026/08/vk-mini-legacy-amlogic-a113x-%d1%87%d0%b0%d1%81%d1%82%d1%8c-1-%d1%81%d1%82%d0%b0%d0%b2%d0%b8%d0%bc-alpine-%d1%81%d0%be-%d1%81%d0%b2%d0%b5%d0%b6%d0%b8%d0%bc-%d0%bc%d0%b0%d0%b9%d0%bd%d0%bb%d0%b0/
 
 По этой же ссылке найдете и сборку Alpine Linux для этой колонки на этом ядре (в конце статьи или в меню сайта).
+
+Конфиг Alpine также приложен, или можете вытащить его прямо на колонке:
+   ```
+   modprobe configs && zcat /proc/config.gz > config
+   ```
