@@ -5030,7 +5030,8 @@ static int vm_cfg80211_mgmt_tx_p2p(struct wiphy *wiphy, struct wireless_dev *wde
     struct iw_mlme wextmlme;
     unsigned long long id = 0;
     struct net_device *dev = ndev;
-    unsigned int center_freq = params->chan->center_freq;
+    unsigned int center_freq = params->chan ? params->chan->center_freq :
+        (wifimac->wm_curchan ? wifi_mac_Ieee2mhz(wifimac->wm_curchan->chan_pri_num, 0) : 0);
 
     p2p_act = (struct wifi_mac_p2p_action_frame *)(params->buf + sizeof(struct wifi_frame));
     p2p_pub_act = (struct wifi_mac_p2p_pub_act_frame *)(params->buf + sizeof(struct wifi_frame));
@@ -5230,7 +5231,8 @@ static int vm_cfg80211_mgmt_tx_sta(struct wiphy *wiphy, struct wireless_dev *wde
     struct wifi_mac *wifimac = wnet_vif->vm_wmac;
     const struct wifi_frame *wh;
     int target_channel;
-    unsigned int center_freq = params->chan->center_freq;
+    unsigned int center_freq = params->chan ? params->chan->center_freq :
+        (wifimac->wm_curchan ? wifi_mac_Ieee2mhz(wifimac->wm_curchan->chan_pri_num, 0) : 0);
     unsigned char ack = true;
     unsigned char auth_alg;
     struct wifi_channel *auth_channel;
