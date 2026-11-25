@@ -727,6 +727,7 @@
 		clocks = <&wifi32k>;
 		vddio-supply = <&w1_bt>;
 		firmware-name = "aml/w1_bt_fw_uart.bin";
+		amlogic,a2dp-sink;
 	};
 };
 

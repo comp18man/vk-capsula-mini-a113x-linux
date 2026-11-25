@@ -44,6 +44,11 @@ properties:
     maxItems: 1
     description: specify the path of firmware bin to load
 
+  amlogic,a2dp-sink:
+    type: boolean
+    description:
+      The device receives A2DP audio.
+
 required:
   - compatible
   - clocks

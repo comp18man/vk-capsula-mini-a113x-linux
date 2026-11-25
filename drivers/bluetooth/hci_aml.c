@@ -59,6 +59,7 @@
 #define AML_RAM_POWER_OFF			(1)
 
 /* RF configuration */
+#define AML_RF_A2DP_SINK			BIT(25)
 #define AML_RF_ANT_SINGLE			BIT(28)
 #define AML_RF_ANT_DOUBLE			BIT(29)
 
@@ -101,6 +102,7 @@ struct aml_serdev {
 	struct clk *lpo_clk;
 	const struct aml_device_data *aml_dev_data;
 	const char *firmware_name;
+	bool a2dp_sink;
 };
 
 struct aml_data {
@@ -447,13 +449,16 @@ exit:
 	return 0;
 }
 
-static int aml_config_rf(struct hci_dev *hdev, bool is_coex)
+static int aml_config_rf(struct hci_dev *hdev, bool is_coex, bool a2dp_sink)
 {
 	u32 value = AML_RF_ANT_DOUBLE;
 
 	/* Use a single antenna when co-existing with wifi */
 	if (is_coex)
 		value = AML_RF_ANT_SINGLE;
+
+	if (a2dp_sink)
+		value |= AML_RF_A2DP_SINK;
 
 	return aml_send_tci_cmd(hdev, AML_TCI_CMD_WRITE,
 				AML_OP_RF_CFG,
@@ -474,6 +479,8 @@ static int aml_parse_dt(struct aml_serdev *amldev)
 					&amldev->firmware_name))
 		return dev_err_probe(pdev, -ENODEV,
 				     "Failed to acquire firmware path\n");
+
+	amldev->a2dp_sink = device_property_read_bool(pdev, "amlogic,a2dp-sink");
 
 	amldev->bt_supply = devm_regulator_get(pdev, "vddio");
 	if (IS_ERR(amldev->bt_supply))
@@ -607,7 +614,8 @@ static int aml_setup(struct hci_uart *hu)
 	if (err)
 		return err;
 
-	err = aml_config_rf(hdev, amldev->aml_dev_data->is_coex);
+	err = aml_config_rf(hdev, amldev->aml_dev_data->is_coex,
+			    amldev->a2dp_sink);
 	if (err)
 		return err;
 
